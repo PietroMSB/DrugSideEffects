@@ -1,0 +1,31 @@
+PPI table shape: (64005, 2)
+DPI table shape: (8037100, 3)
+DSA table shape: (309848, 6)
+Unique proteins: 9384
+Unique side-effects: 5868
+Unique drugs in dpi: 340509
+Unique drugs in dsa: 1430
+Selecting side-effects with a minimum of 100 occurrences
+Removed 5273 side-effects
+Removing drug-Side effect associations of removed side-effects
+Removed 68716 drug-side-effect associations
+Selecting drugs with at least one side effect after filtering, and at least one DPI
+Removed 87 drugs
+Removing drug-Side effect associations of removed drugs
+Removed 14476 drug-side-effect associations
+Removing DPIs of molecules that are outside of this study or that were excluded by filters
+Processing DPI 8037100 of 8037100
+Removed 7722617 DPIs
+Selecting proteins with at least one DPI
+Removed 536 proteins
+Processing PPI 64005 of 64005
+Removed 52000 PPIs
+
+Drugs: 1343
+Proteins: 8848
+Side Effects: 595
+Dpi: 314483
+Ppi: 12005
+Drug-SE links: 226656
+Total predictions: 799085
+
