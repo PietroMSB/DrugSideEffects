@@ -9,6 +9,7 @@ import pandas
 import tensorflow as tf
 import scipy
 import pickle
+from itertools import product
 
 import spektral
 from tensorflow.keras.models import Model
@@ -17,6 +18,7 @@ from spektral.layers import GCNConv
 from spektral.data import Graph
 from spektral.data import Dataset
 from spektral.data.loaders import SingleLoader
+from spektral.utils import gcn_filter
 from tensorflow import gather 
 
 #network parameters
@@ -30,7 +32,7 @@ TRAINING_BATCHES = 1        #number of batches in which the training set should 
 #script parameters
 run_id = sys.argv[1]
 path_data = "Datasets/Nuovo/Output/Soglia_100/"
-path_sideeffects = "Datasets/"+dataset_name+"/Raw/side_effects.txt"
+path_preprocessed = "Datasets/Nuovo/Output/Spektral_Preprocessed/Soglia_100/"
 path_results = "Results/Nuovo/LinkPredictor/"+run_id+".txt"
 splitting_seed = 920305
 validation_share = 0.1
@@ -64,22 +66,25 @@ def NXtoGO(nx_graph, target):
 class LinkPredictor(Model):
 
 	#constructor
-    def __init__(self, list_hidden, units_dense):
+	def __init__(self, list_hidden, units_dense):
 		#Keras.Model class constructor
-        super().__init__()
+		super().__init__()
 		#define list of convolutional layers
 		self.graph_conv = list()
 		for h in list_hidden:
 			self.graph_conv.append(GCNConv(h))
 		self.dense = Dense(units_dense,"relu")
-		self.output_layer = Dense(1,'logistic')
+		self.output_layer = Dense(1,'sigmoid')
 
 	#call predictor on input data
-    def call(self, inputs, out_edges, set_mask):
-        node_state = inputs
+	def call(self, inputs):
+		node_state = inputs[0][0] #input node features
+		adjacency = inputs[0][1] #input adjacency tensor (previously transformed with GCNFilter())
+		out_edges = inputs[0][2] #output edges
+		set_mask = inputs[0][3] #training/validation/test mask
 		#call every convolutional layers
 		for gc in self.graph_conv:
-			node_state = gc(node_state)
+			node_state = gc(node_state, adjacency)
 		#transform node states to edge states
 		edge_state = tf.concat((gather(node_state, out_edges[:,0]),gather(node_state, out_edges[:,1])), axis = 1)
 		#apply set mask
@@ -87,7 +92,7 @@ class LinkPredictor(Model):
 		#apply dense layer
 		out = self.dense(edge_state_set)
 		out = self.output_layer(out)
-        return out
+		return out
 
 #load side-effect data
 in_file = open(path_data+"side_effects.pkl", 'rb')
@@ -99,7 +104,7 @@ genes = pickle.load(in_file)
 in_file.close()
 #load drug data
 in_file = open(path_data+"drugs.pkl", 'rb')
-drugs = pickle.load(in_file)
+drugs_pre = pickle.load(in_file)
 in_file.close()
 #load drug-side effect links
 in_file = open(path_data+"drug_side_effect_links.pkl", 'rb')
@@ -116,49 +121,63 @@ in_file.close()
 #load drug features
 pubchem_data = pandas.read_csv(path_data+"pubchem_output.csv")
 
+#preprocess drug ids
+drugs = list()
+for i in range(len(drugs_pre)):
+	drugs.append(str(int(drugs_pre[i][4:])))
+
 #determine graph dimensions
-n_nodes = drugs.shape[0]+side_effects.shape[0]+genes.shape[0]
-n_edges = 2*links_dg.shape[0]+2*links_gg.shape[0]+2*drugs.shape[0]*side_effects.shape[0]
+n_nodes = len(drugs)+len(side_effects)+len(genes)
+n_edges = 2*links_dg.shape[0]+2*links_gg.shape[0]+2*len(drugs)*len(side_effects)
 dim_node_label = 7
 #build id -> node number mappings
 node_number = dict()
-for i in range(drugs.shape[0]):
-	node_number[str(drugs[i][0])] = i
-for i in range(side_effects.shape[0]):
-	node_number[str(side_effects[i][0])] = i + drugs.shape[0] 
-for i in range(genes.shape[0]):
-	node_number[str(genes[i][0])] = i + drugs.shape[0] + side_effects.shape[0]
+for i in range(len(drugs)):
+	node_number[str(drugs[i])] = i
+for i in range(len(side_effects)):
+	node_number[str(side_effects[i])] = i + len(drugs) 
+for i in range(len(genes)):
+	node_number[str(genes[i])] = i + len(drugs) + len(side_effects)
 
 #build list of positive examples
 positive_dsa_list = list()
 for i in range(links_dse.shape[0]):
-	positive_dsa_list.append((node_number[str(links_dse[i][0])],node_number[str(links_dse[i][1])]))
+	if str(int(links_dse[i][0][4:])) in node_number.keys():
+		positive_dsa_list.append((node_number[str(int(links_dse[i][0][4:]))],node_number[links_dse[i][2]]))
+	else:
+		sys.exit("ERROR: drug-side-effect link pointing to incorrect drug id")
 
 #build node feature matrix
-nodes = np.zeros(n_nodes, dim_node_label)
+nodes = np.zeros((n_nodes, dim_node_label))
 for i in pubchem_data.index:
-	nn = node_number[pubchem_data.at[i,'id']]
+	nn = node_number[str(pubchem_data.at[i,'cid'])]
 	nodes[nn][0] = float(pubchem_data.at[i,'mw'])#molecular weight
 	nodes[nn][1] = float(pubchem_data.at[i,'polararea'])#polar area
 	nodes[nn][2] = float(pubchem_data.at[i,'xlogp'])#log octanal/water partition coefficient
-	nodes[nn][3] = float(pubchem_data.at[i,'heavycount'])#heavy atom count
+	nodes[nn][3] = float(pubchem_data.at[i,'heavycnt'])#heavy atom count
 	nodes[nn][4] = float(pubchem_data.at[i,'hbonddonor'])#hydrogen bond donors
-	nodes[nn][5] = float(pubchem_data.at[i,'hbondacceptor'])#hydrogen bond acceptors
+	nodes[nn][5] = float(pubchem_data.at[i,'hbondacc'])#hydrogen bond acceptors
 	nodes[nn][6] = float(pubchem_data.at[i,'rotbonds'])#number of rotatable bonds
 
-#build adjacency matrix, edge mask, output edges, and edge targets
-edge_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+drugs.shape[0]*side_effects.shape[0], dtype=int), np.ones(drugs.shape[0]*side_effects.shape[0], dtype=int)), axis=0)
+#build edge mask
+edge_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), np.ones(len(drugs)*len(side_effects), dtype=int)), axis=0)
+#build target tensor
+targets = np.zeros(len(drugs)*len(side_effects))
+for p in positive_dsa_list:
+	#each drug d has a block of len(side_effects) indices starting at (node_number[d]*len(side_effects)). The single side effect s has an offset equal to node_number[s]-len(drugs) inside this block (len(drugs) is subtracted because side effect node numbers are after drug node numbers, so that side effect #3 will have node number equal to len(drugs)+3)
+	k = p[0]*len(side_effects) + p[1]-len(drugs)
+	targets[k] = 1
+#build adjacency matrix and list of output edges
 out_edges = list()
 adj_data = np.ones(n_edges, dtype=int)
 adj_row = list()
 adj_col = list()
-targets = np.zeros(drugs.shape[0]*side_effects.shape[0])
 #add drug-gene edges
 for i in range(links_dg.shape[0]):
-	adj_row.append(node_number[str(links_dg[i][0])])
+	adj_row.append(node_number[str(int(links_dg[i][0]))])
 	adj_col.append(node_number[str(links_dg[i][1])])
 	adj_row.append(node_number[str(links_dg[i][1])])
-	adj_col.append(node_number[str(links_dg[i][0])])
+	adj_col.append(node_number[str(int(links_dg[i][0]))])
 #add gene-gene edges
 for i in range(links_gg.shape[0]):
 	adj_row.append(node_number[str(links_gg[i][0])])
@@ -166,24 +185,22 @@ for i in range(links_gg.shape[0]):
 	adj_row.append(node_number[str(links_gg[i][1])])
 	adj_col.append(node_number[str(links_gg[i][0])])
 #add drug-se edges
-for i in range(drugs.shape[0]):
-	for j in range(side_effects.shape[0]):
+for i in range(len(drugs)):
+	for j in range(len(side_effects)):
 		#side-effect-drug links only exist for message passing
-		adj_row.append(node_number[str(side_effects[j][0])])
-		adj_col.append(node_number[str(drugs[i][0])])
-k = 0
-for i in range(drugs.shape[0]):
-	for j in range(side_effects.shape[0]):
+		adj_row.append(node_number[str(side_effects[j])])
+		adj_col.append(node_number[str(drugs[i])])
+for i in range(len(drugs)):
+	for j in range(len(side_effects)):
 		#drug-side-effect links are the ones on which the prediction is carried out
-		adj_row.append(node_number[str(drugs[i][0])])
-		adj_col.append(node_number[str(side_effects[j][0])])
-		out_edges.append([node_number[str(drugs[i][0])], node_number[str(side_effects[j][0])]])
-		if (i,j) in positive_dsa_list:
-			targets[k] = 1
-		k++
-out_edges = np.array(out_egdes)
+		print("Preprocessing Possible Drug-Side Effect Link "+str(i*len(side_effects)+j+1)+" of "+str(len(drugs)*len(side_effects)), end='\r')
+		adj_row.append(node_number[str(drugs[i])])
+		adj_col.append(node_number[str(side_effects[j])])
+		out_edges.append([node_number[str(drugs[i])], node_number[str(side_effects[j])]])
+print("")
+out_edges = np.array(out_edges)
 adjacency = scipy.sparse.coo_matrix((adj_data, (adj_row, adj_col)))
-	
+
 #split the dataset
 validation_size = int(validation_share*len(targets))
 test_size = int(test_share*len(targets))
@@ -202,6 +219,7 @@ for i in validation_index:
 for i in training_index:
 	tr_mask[i] = 1
 
+'''
 #create spektral.data.Graph object
 graph = Graph()
 graph.a = adjacency
@@ -211,12 +229,19 @@ graph.y = targets
 dataset = Dataset([graph])
 #create loader object
 loader = SingleLoader(dataset)
+'''
 
 #build network
 model = LinkPredictor([20,20,20], 30)
 model.compile("Adam","binary_crossentropy")
 
-#train the network
+#preprocess data
+adjacency = gcn_filter(adjacency)
+tr_batch = ((nodes, adjacency, out_edges, tr_mask), targets)
+va_batch = ((nodes, adjacency, out_edges, va_mask), targets)
+te_batch = ((nodes, adjacency, out_edges, te_mask), targets)
+
+#train network
 model.fit(tr_batch, EPOCHS, va_batch)
 
 #evaluate the network

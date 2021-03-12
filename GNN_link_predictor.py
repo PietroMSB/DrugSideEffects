@@ -12,13 +12,14 @@ import pickle
 
 from GNNv3.GNN.CGNN.CGNN import *
 from GNNv3.GNN.CGNN.composite_graph_class import CompositeGraphObject
+from GNNv3.GNN import GNN_utils as utils
 
 #network parameters
 CLASSES = 1					#number of outputs
 EPOCHS = 500                #number of training epochs
 STATE_DIM = 10				#node state dimension
+STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
 LR = 0.001					#learning rate
-THRESHOLD = 0.001			#state convergence threshold, in terms of relative state difference
 MAX_ITER = 6				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
@@ -124,32 +125,39 @@ for i in pubchem_data.index:
 	nodes[nn][5] = float(pubchem_data.at[i,'hbondacc'])#hydrogen bond acceptors
 	nodes[nn][6] = float(pubchem_data.at[i,'rotbonds'])#number of rotatable bonds
 
-#build adjacency matrix, edge mask, output edges, and edge targets
+#build edge mask
 edge_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), np.ones(len(drugs)*len(side_effects), dtype=int)), axis=0)
-arcs = list()
+#build target tensor
 targets = np.zeros(len(drugs)*len(side_effects))
+for p in positive_dsa_list:
+	#each drug d has a block of len(side_effects) indices starting at (node_number[d]*len(side_effects)). The single side effect s has an offset equal to node_number[s]-len(drugs) inside this block (len(drugs) is subtracted because side effect node numbers are after drug node numbers, so that side effect #3 will have node number equal to len(drugs)+3)
+	k = p[0]*len(side_effects) + p[1]-len(drugs)
+	targets[k] = 1
+#build arcs tensor
+arcs = np.zeros((n_edges,2), dtype=int)
+l = 0
 #add drug-gene edges
 for i in range(links_dg.shape[0]):
-	arcs.append([node_number[str(int(links_dg[i][0]))],node_number[str(links_dg[i][1])]])
-	arcs.append([node_number[str(links_dg[i][1])],node_number[str(int(links_dg[i][0]))]])
+	arcs[l][:] = [node_number[str(int(links_dg[i][0]))],node_number[str(links_dg[i][1])]]
+	arcs[l+1][:] = [node_number[str(links_dg[i][1])],node_number[str(int(links_dg[i][0]))]]
+	l = l+2
 #add gene-gene edges
 for i in range(links_gg.shape[0]):
-	arcs.append([node_number[str(links_gg[i][0])],node_number[str(links_gg[i][1])]])
-	arcs.append([node_number[str(links_gg[i][1])],node_number[str(links_gg[i][0])]])
+	arcs[l][:] = [node_number[str(links_gg[i][0])],node_number[str(links_gg[i][1])]]
+	arcs[l+1][:] = [node_number[str(links_gg[i][1])],node_number[str(links_gg[i][0])]]
+	l = l+2
 #add drug-se edges
 for i in range(len(drugs)):
 	for j in range(len(side_effects)):
 		#side-effect-drug links only exist for message passing
-		arcs.append([node_number[str(side_effects[j])], node_number[str(drugs[i])]])
-k = 0
+		arcs[l][:] = [node_number[str(side_effects[j])], node_number[str(drugs[i])]]
+		l = l+1
 for i in range(len(drugs)):
 	for j in range(len(side_effects)):
-		print("Preprocessing Possible Drug-Side Effect Link "+str(i*len(drugs)+j+1)+" of "+str(len(drugs)*len(side_effects)), end='\r')
+		print("Preprocessing Possible Drug-Side Effect Link "+str(i*len(side_effects)+j+1)+" of "+str(len(drugs)*len(side_effects)), end='\r')
 		#drug-side-effect links are the ones on which the prediction is carried out
-		arcs.append([node_number[str(drugs[i])],node_number[str(side_effects[j])]])
-		if (i,j) in positive_dsa_list:
-			targets[k] = 1
-		k+=1
+		arcs[l][:] = [node_number[str(drugs[i])],node_number[str(side_effects[j])]]
+		l=l+1
 print("")
 arcs = np.array(arcs)
 	
@@ -161,6 +169,7 @@ np.random.shuffle(index)
 test_index = index[:test_size]
 validation_index = index[test_size:test_size+validation_size]
 training_index = index[test_size+validation_size:]
+#build set masks
 te_mask = np.zeros(len(targets), dtype=int)
 va_mask = np.zeros(len(targets), dtype=int)
 tr_mask = np.zeros(len(targets), dtype=int)
@@ -170,11 +179,17 @@ for i in validation_index:
 	va_mask[i] = 1
 for i in training_index:
 	tr_mask[i] = 1
+#concatenate a zero mask for all the non-targeted edges to each set mask
+te_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), te_mask), axis=0)
+va_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), va_mask), axis=0)
+tr_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), tr_mask), axis=0)
+#concatenate a placeholder zero vector of targets for non-output nodes
+expanded_targets = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), targets), axis=0)
 
 #build CompositeGraphObject
-tr_graph = CompositeGraphObject(arcs, nodes, targets, 'a', tr_mask, edge_mask, type_mask, node_aggregation='average')
-va_graph = CompositeGraphObject(arcs, nodes, targets, 'a', va_mask, edge_mask, type_mask, node_aggregation='average')
-te_graph = CompositeGraphObject(arcs, nodes, targets, 'a', te_mask, edge_mask, type_mask, node_aggregation='average')
+tr_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', tr_mask, edge_mask, type_mask, node_aggregation='average')
+va_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', va_mask, edge_mask, type_mask, node_aggregation='average')
+te_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', te_mask, edge_mask, type_mask, node_aggregation='average')
 
 #build network
 netSt_drugs = utils.MLP(input_dim=STATE_DIM+nodes.shape[1], layers=[10, 15], activations=['relu', 'relu'],
@@ -192,15 +207,15 @@ netSt_sideeffects = utils.MLP(input_dim=STATE_DIM+nodes.shape[1], layers=[10, 15
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      dropout_percs=[0.2, 0],
                      dropout_pos=[0, 0])
-netOut = utils.MLP(input_dim=2*STATE_DIM, layers=[20,1], activations=['relu', 'linear'],
+netOut = utils.MLP(input_dim=2*STATE_DIM, layers=[15,1], activations=['relu', 'linear'],
                       kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       dropout_percs=[0, 0],
                       dropout_pos=[0, 0])
-model = GNNedgeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.nn.binary_cross_entropy, state_vect_dim = 0, max_iteration=MAX_ITER, threshold=THRESHOLD, addressed_problem='c', loss_arguments=None, output_activation=tf.math.sigmoid)
+model = CGNNedgeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.binary_crossentropy, state_vect_dim = 10, type_label_lengths=np.array([7,0,0,0]),state_init_stdev=STATE_INIT_STDEV, max_iteration=MAX_ITER, addressed_problem='c', loss_arguments=None, output_activation=tf.math.sigmoid)
 
 #train the network
-model.fit(tr_graph, EPOCHS, va_graph)
+model.train(tr_graph, EPOCHS, va_graph)
 
 #evaluate the network
 iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, class_weights=[1 for i in range(CLASSES)], training=False)
