@@ -192,17 +192,17 @@ va_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', va_mask, edg
 te_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', te_mask, edge_mask, type_mask, node_aggregation='average')
 
 #build network
-netSt_drugs = utils.MLP(input_dim=STATE_DIM+nodes.shape[1], layers=[10, 15], activations=['relu', 'relu'],
+netSt_drugs = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      dropout_percs=[0.2, 0],
                      dropout_pos=[0, 0])
-netSt_genes = utils.MLP(input_dim=STATE_DIM+nodes.shape[1], layers=[10, 15], activations=['relu', 'relu'],
+netSt_genes = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      dropout_percs=[0.2, 0],
                      dropout_pos=[0, 0])
-netSt_sideeffects = utils.MLP(input_dim=STATE_DIM+nodes.shape[1], layers=[10, 15], activations=['relu', 'relu'],
+netSt_sideeffects = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      dropout_percs=[0.2, 0],

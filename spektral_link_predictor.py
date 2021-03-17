@@ -14,6 +14,7 @@ from itertools import product
 import spektral
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout
+from spektral.transforms import GCNFilter
 from spektral.layers import GCNConv
 from spektral.data import Graph
 from spektral.data import Dataset
@@ -93,6 +94,32 @@ class LinkPredictor(Model):
 		out = self.dense(edge_state_set)
 		out = self.output_layer(out)
 		return out
+
+#custom dataset class
+class CustomDataset(Dataset):
+
+	def __init__(self, adjacency, nodes, arcs, targets, out_edges, **kwargs):
+		self.adjacency = adjacency
+		self.nodes = nodes
+		self.arcs = arcs
+		self.targets = targets
+		self.out_edges = out_edges
+		super().__init__(**kwargs)
+
+	def read(self):
+		g = Graph(a=self.adjacency, e=self.arcs, x=self.nodes, y=self.targets)
+		g.out_edges = out_edges
+		return [g]
+
+#custom loader class
+class CustomLoader(SingleLoader):
+	
+	def __init__(self, dataset, epochs, sample_weights, set_mask):
+		self.set_mask = set_mask
+		super().__init__(dataset, epochs, sample_weights)
+	
+	def collate(self, batch):
+		return (batch[0].x, tf.sparse.SparseTensor(batch[0].a), batch[0].out_edges, self.set_mask), batch[0].y
 
 #load side-effect data
 in_file = open(path_data+"side_effects.pkl", 'rb')
@@ -219,33 +246,24 @@ for i in validation_index:
 for i in training_index:
 	tr_mask[i] = 1
 
-'''
-#create spektral.data.Graph object
-graph = Graph()
-graph.a = adjacency
-graph.x = nodes
-graph.y = targets
-#create corresponding spektral.data.Dataset object
-dataset = Dataset([graph])
-#create loader object
-loader = SingleLoader(dataset)
-'''
+
+#create spektral dataset object
+dataset = CustomDataset(adjacency, nodes, None, targets, out_edges)
+dataset.apply(GCNFilter())
+#create loader objects
+tr_loader = CustomLoader(dataset, EPOCHS, None, tr_mask)
+va_loader = CustomLoader(dataset, 1, None, va_mask)
+te_loader = CustomLoader(dataset, 1, None, te_mask)
 
 #build network
 model = LinkPredictor([20,20,20], 30)
 model.compile("Adam","binary_crossentropy")
 
-#preprocess data
-adjacency = gcn_filter(adjacency)
-tr_batch = ((nodes, adjacency, out_edges, tr_mask), targets)
-va_batch = ((nodes, adjacency, out_edges, va_mask), targets)
-te_batch = ((nodes, adjacency, out_edges, te_mask), targets)
-
 #train network
-model.fit(tr_batch, EPOCHS, va_batch)
+model.fit(tr_loader.load(), EPOCHS, va_loader.load())
 
 #evaluate the network
-iterations, loss, targets, outputs = model.evaluate_single_graph(te_batch, class_weights=[1 for i in range(CLASSES)], training=False)
+iterations, loss, targets, outputs = model.evaluate_single_graph(te_loader.load(), class_weights=[1 for i in range(CLASSES)], training=False)
 
 #calculate results
 TP = [0 for j in range(CLASSES)]
