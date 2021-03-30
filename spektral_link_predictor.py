@@ -14,8 +14,8 @@ from itertools import product
 import spektral
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout
-from spektral.transforms import GCNFilter
 from spektral.layers import GCNConv
+from spektral.transforms import GCNFilter
 from spektral.data import Graph
 from spektral.data import Dataset
 from spektral.data.loaders import SingleLoader
@@ -23,7 +23,7 @@ from spektral.utils import gcn_filter
 from tensorflow import gather 
 
 #network parameters
-EPOCHS = 500                #number of training epochs
+EPOCHS = 2                #number of training epochs
 LR = 0.001					#learning rate
 THRESHOLD = 0.001			#state convergence threshold, in terms of relative state difference
 MAX_ITER = 6				#maximum number of state convergence iterations
@@ -79,11 +79,13 @@ class LinkPredictor(Model):
 
 	#call predictor on input data
 	def call(self, inputs):
-		node_state = inputs[0][0] #input node features
-		adjacency = inputs[0][1] #input adjacency tensor (previously transformed with GCNFilter())
-		out_edges = inputs[0][2] #output edges
-		set_mask = inputs[0][3] #training/validation/test mask
-		#call every convolutional layers
+		node_state = inputs[0] #input node features
+		adjacency = inputs[1] #input adjacency tensor (previously transformed with GCNFilter())
+		out_edges = inputs[2] #output edges
+		set_mask = inputs[3] #training/validation/test mask
+		#transform adjacency matrix into a sparse tensor
+		#adjacency = tf.sparse.from_dense(adjacency)
+		#call every convolutional layer
 		for gc in self.graph_conv:
 			node_state = gc(node_state, adjacency)
 		#transform node states to edge states
@@ -119,7 +121,10 @@ class CustomLoader(SingleLoader):
 		super().__init__(dataset, epochs, sample_weights)
 	
 	def collate(self, batch):
-		return (batch[0].x, tf.sparse.SparseTensor(batch[0].a), batch[0].out_edges, self.set_mask), batch[0].y
+		coo_mat = batch[0].a.tocoo()
+		indices = np.mat([coo_mat.row, coo_mat.col]).transpose()
+		adj = tf.SparseTensor(indices, coo_mat.data, coo_mat.shape)
+		return ([batch[0].x], [adj], batch[0].out_edges, self.set_mask), batch[0].y
 
 #load side-effect data
 in_file = open(path_data+"side_effects.pkl", 'rb')
@@ -248,19 +253,22 @@ for i in training_index:
 
 
 #create spektral dataset object
+print("Packing data")
 dataset = CustomDataset(adjacency, nodes, None, targets, out_edges)
 dataset.apply(GCNFilter())
 #create loader objects
-tr_loader = CustomLoader(dataset, EPOCHS, None, tr_mask)
-va_loader = CustomLoader(dataset, 1, None, va_mask)
-te_loader = CustomLoader(dataset, 1, None, te_mask)
+tr_loader = CustomLoader(dataset, None, None, tr_mask)
+va_loader = CustomLoader(dataset, None, None, va_mask)
+te_loader = CustomLoader(dataset, None, None, te_mask)
 
 #build network
+print("Building the network")
 model = LinkPredictor([20,20,20], 30)
 model.compile("Adam","binary_crossentropy")
 
 #train network
-model.fit(tr_loader.load(), EPOCHS, va_loader.load())
+print("Training the network")
+model.fit(tr_loader.load(), steps_per_epoch=tr_loader.steps_per_epoch, epochs=EPOCHS, validation_data=va_loader.load(), validation_steps=1)
 
 #evaluate the network
 iterations, loss, targets, outputs = model.evaluate_single_graph(te_loader.load(), class_weights=[1 for i in range(CLASSES)], training=False)
