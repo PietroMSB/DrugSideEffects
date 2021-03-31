@@ -4,7 +4,7 @@ from typing import Union, Optional
 
 import numpy as np
 
-from GNN.graph_class import GraphObject
+from GNNv3.GNN.graph_class import GraphObject
 
 
 #######################################################################################################################

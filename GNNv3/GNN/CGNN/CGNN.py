@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Union
 
 import tensorflow as tf
-from numpy import array
+import numpy as np
 from pandas import options
 
 from GNNv3.GNN.CGNN.CGNN_BaseClass import BaseCGNN
@@ -60,7 +60,7 @@ class CGNNnodeBased(BaseCGNN):
 		self.net_output = net_output
 		self.max_iteration = max_iteration
 		self.state_vect_dim = state_vect_dim
-		self.sate_init_stdev = state_init_stdev
+		self.state_init_stdev = state_init_stdev
 		self.type_label_lengths = type_label_lengths
 		self.type_offsets = tf.constant(np.subtract(self.type_label_lengths, np.max(self.type_label_lengths)))
 		
@@ -117,18 +117,20 @@ class CGNNnodeBased(BaseCGNN):
 
 	## LOOP METHODS ###################################################################################################
 	# @tf.function
-	def type_loop_condition(i, type_mask, *args):
+	def type_loop_condition(self, i, *args):
 		""" Boolean function for type sub-loop condition """
 		#check the number of types processed
-		return tf.less(i, tf.shape(type_mask)[1])
+		return tf.less(i, len(self.net_state_list))
 
 	# -----------------------------------------------------------------------------------------------------------------
 	# @tf.function
-	def type_loop_body(i, type_mask, inp_state, out_state, inp_index, out_index, training):
+	def type_loop_body(self, i, out_state, out_index, type_mask, inp_state, inp_index, training):
 		""" Loop body function for type sub-loop """
 		# apply i-th column of type_mask to input
 		ith_input = tf.boolean_mask(inp_state, type_mask[:,i], axis=0)
 		# apply i-th column of type_mask to index
+		print(type_mask.shape)
+		print(type_mask[:,i].shape)
 		ith_index = tf.boolean_mask(inp_index, type_mask[:,i], axis=0)
 		# trim i-th input tensor in accordance to the length of the label of that type of node (state len + message len + type label len)
 		ith_input = ith_input[:,:self.type_offsets[i]]
@@ -139,7 +141,7 @@ class CGNNnodeBased(BaseCGNN):
 		# concatenate i-th index to <out_index>
 		out_index = tf.concat((out_index, ith_index), axis=0)
 		# return
-		return i+1, out_state, out_index
+		return i+1, type_mask, inp_state, out_state, inp_index, out_index, training
 	
 	# -----------------------------------------------------------------------------------------------------------------
 	# @tf.function
@@ -163,19 +165,22 @@ class CGNNnodeBased(BaseCGNN):
 		
 		# concatenate the destination node 'old' states to the incoming messages
 		inp_state = tf.concat((state, message, nodes), axis=1)
+		print(inp_state.shape)
+		print(tf.range(inp_state.shape[0]).shape)
+		print(tf.transpose(tf.range(inp_state.shape[0])).shape)
 		# define index vector to allow the reconstruction of the state tensor
 		inp_index = tf.transpose(tf.range(inp_state.shape[0]))
 		
 		# pre-build output tensor for state calculation
-		out_state = tf.zeros((0, self.state_vector_dim), dtype=tf.float32)
+		out_state = tf.zeros((0, self.state_vect_dim), dtype=tf.float32)
 		# pre-build output index for state reconstruction
-		out_index = tf.zeros((0, 1), dtype=tf.int32)
+		out_index = tf.zeros((0), dtype=tf.int32)
 		
 		# initialize iteration counter
-		i = tf.constant(0, dtype=tf.float32)
+		i = tf.constant(0, dtype=tf.int32)
 
 		# compute new state and update iteration counter
-		i, out_state, out_index = tf.while_loop(self.type_loop_condition, self.type_loop_body, [i, type_mask, inp_state, out_state, inp_index, out_index, training])
+		i, out_state, out_index, *_ = tf.while_loop(self.type_loop_condition, self.type_loop_body, [i, out_state, out_index, type_mask, inp_state, inp_index, training])
 
 		#reconstruct state tensor
 		inverted_index = tf.scalar_mul(-1, out_index)
@@ -208,7 +213,7 @@ class CGNNnodeBased(BaseCGNN):
 		# initialize all the useful variables for convergence loop
 		k = tf.constant(0, dtype=tf.float32)
 		state = tf.zeros((nodes.shape[0], self.state_vect_dim), dtype=tf.float32)
-		state_old = tf.random.normal(nodes.shape[0], self.state_vect_dim, mean=0.0, stddev=self.state_init_stdev, dtype=tf.float32, seed=None, name=None)
+		state_old = tf.random.normal((nodes.shape[0], self.state_vect_dim), mean=0.0, stddev=self.state_init_stdev, dtype=tf.float32, seed=None, name=None)
 		training = tf.constant(training)
 		
 		# loop until convergence is reached

@@ -186,6 +186,20 @@ tr_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(d
 #concatenate a placeholder zero vector of targets for non-output nodes
 expanded_targets = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), targets), axis=0)
 
+### DEBUG START ###
+'''
+print(nodes.shape)
+print(arcs.shape)
+print(expanded_targets.shape)
+print(tr_mask.shape)
+print(va_mask.shape)
+print(te_mask.shape)
+print(edge_mask.shape)
+print(type_mask.shape)
+sys.exit()
+'''
+### DEBUG STOP ###
+
 #build CompositeGraphObject
 tr_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', tr_mask, edge_mask, type_mask, node_aggregation='average')
 va_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', va_mask, edge_mask, type_mask, node_aggregation='average')

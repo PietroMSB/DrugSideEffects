@@ -44,7 +44,7 @@ class CompositeGraphObject:
 		self.type_mask = np.ones((lenMask[self.problem_based], 1)) if type_mask is None else type_mask
 
 		# check lengths: output_mask must be as long as set_mask
-		if not len(self.set_mask) == len(self.output_mask) == self.type_mask.shape[0]:
+		if not len(self.set_mask) == len(self.output_mask):
 			raise ValueError('Error - len(<set_mask>) != len(<output_mask>)')
 
 		# build node_graph conversion matrix
