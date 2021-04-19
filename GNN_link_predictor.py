@@ -15,14 +15,18 @@ from GNNv3.GNN.CGNN.composite_graph_class import CompositeGraphObject
 from GNNv3.GNN import GNN_utils as utils
 
 #network parameters
-CLASSES = 1					#number of outputs
+CLASSES = 2					#number of outputs
 EPOCHS = 500                #number of training epochs
 STATE_DIM = 10				#node state dimension
 STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
-LR = 0.001					#learning rate
+LR = 0.01					#learning rate
 MAX_ITER = 6				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
+
+#gpu parameters
+use_gpu = True
+target_gpu = "1"
 
 #script parameters
 run_id = sys.argv[1]
@@ -34,6 +38,7 @@ test_share = 0.1
 atomic_number = { 'Li':3, 'B':5, 'C':6, 'N':7, 'O':8, 'F':9, 'Mg':12, 'Al':13, 'P':15, 'S':16, 'Cl':17, 'K':19, 'Ca':20, 'Fe':26, 'Co':27, 'As':33, 'Br':35, 'I':53, 'Au':79 }
 atomic_label = { 3:'Li', 5:'B', 6:'C', 7:'N', 8:'O', 9:'F', 12:'Mg', 13:'Al', 15:'P', 16:'S', 17:'Cl', 19:'K' ,20:'Ca', 26:'Fe', 27:'Co', 33:'As', 35:'Br', 53:'I', 79:'Au' }
 label_translator = {'C':1, 'N':2, 'O':3, 'S':4, 'F':5, 'P':6, 'Cl':7, 'I':7, 'Br':7, 'Ca':8, 'Mg':8, 'K':8, 'Li':8, 'Co':8, 'As':8, 'B':8, 'Al':8, 'Au':8, 'Fe':8}
+class_weights = [0.8, 0.2]
 
 #function that translates a nx_graph into a graph_object
 def NXtoGO(nx_graph, target):
@@ -55,6 +60,10 @@ def NXtoGO(nx_graph, target):
 	arcs = np.array(arcs)
 	node_graph = np.ones((nodes.shape[0],1))
 	return GraphObject(arcs,nodes,targets,'g',NodeGraph=node_graph)
+
+#set target gpu as the only visible device
+if use_gpu:
+	os.environ["CUDA_VISIBLE_DEVICES"]=target_gpu
 
 #load side-effect data
 in_file = open(path_data+"side_effects.pkl", 'rb')
@@ -128,11 +137,12 @@ for i in pubchem_data.index:
 #build edge mask
 edge_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), np.ones(len(drugs)*len(side_effects), dtype=int)), axis=0)
 #build target tensor
-targets = np.zeros(len(drugs)*len(side_effects))
+targets = np.concatenate( ( np.zeros((len(drugs)*len(side_effects), 1)), np.ones((len(drugs)*len(side_effects), 1)) ), axis=1) # [1,0] -> positive ; [0,1] -> negative (creates a vector of default negative targets, then modify positive ones only)
 for p in positive_dsa_list:
 	#each drug d has a block of len(side_effects) indices starting at (node_number[d]*len(side_effects)). The single side effect s has an offset equal to node_number[s]-len(drugs) inside this block (len(drugs) is subtracted because side effect node numbers are after drug node numbers, so that side effect #3 will have node number equal to len(drugs)+3)
 	k = p[0]*len(side_effects) + p[1]-len(drugs)
-	targets[k] = 1
+	targets[k][0] = 1
+	targets[k][1] = 0
 #build arcs tensor
 arcs = np.zeros((n_edges,2), dtype=int)
 l = 0
@@ -162,17 +172,17 @@ print("")
 arcs = np.array(arcs)
 	
 #split the dataset
-validation_size = int(validation_share*len(targets))
-test_size = int(test_share*len(targets))
-index = np.array(list(range(len(targets))))
+validation_size = int(validation_share*targets.shape[0])
+test_size = int(test_share*targets.shape[0])
+index = np.array(list(range(targets.shape[0])))
 np.random.shuffle(index)
 test_index = index[:test_size]
 validation_index = index[test_size:test_size+validation_size]
 training_index = index[test_size+validation_size:]
 #build set masks
-te_mask = np.zeros(len(targets), dtype=int)
-va_mask = np.zeros(len(targets), dtype=int)
-tr_mask = np.zeros(len(targets), dtype=int)
+te_mask = np.zeros(targets.shape[0], dtype=int)
+va_mask = np.zeros(targets.shape[0], dtype=int)
+tr_mask = np.zeros(targets.shape[0], dtype=int)
 for i in test_index:
 	te_mask[i] = 1
 for i in validation_index:
@@ -183,8 +193,8 @@ for i in training_index:
 te_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), te_mask), axis=0)
 va_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), va_mask), axis=0)
 tr_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), tr_mask), axis=0)
-#concatenate a placeholder zero vector of targets for non-output nodes
-expanded_targets = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), targets), axis=0)
+#concatenate a placeholder [0,0]xN vector of targets for non-output nodes
+expanded_targets = np.concatenate((np.zeros((2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects) , 2), dtype=int), targets), axis=0)
 
 ### DEBUG START ###
 '''
@@ -221,18 +231,18 @@ netSt_sideeffects = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      dropout_percs=[0.2, 0],
                      dropout_pos=[0, 0])
-netOut = utils.MLP(input_dim=2*STATE_DIM, layers=[15,1], activations=['relu', 'linear'],
+netOut = utils.MLP(input_dim=2*STATE_DIM+2*nodes.shape[1], layers=[15,2], activations=['relu', 'linear'],
                       kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       dropout_percs=[0, 0],
                       dropout_pos=[0, 0])
-model = CGNNedgeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.binary_crossentropy, state_vect_dim = 10, type_label_lengths=np.array([7,0,0,0]),state_init_stdev=STATE_INIT_STDEV, max_iteration=MAX_ITER, addressed_problem='c', loss_arguments=None, output_activation=tf.math.sigmoid)
+model = CGNNedgeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.nn.softmax_cross_entropy_with_logits, state_vect_dim = 10, type_label_lengths=np.array([7,0,0,0]),state_init_stdev=STATE_INIT_STDEV, max_iteration=MAX_ITER, addressed_problem='c', loss_arguments=None)
 
 #train the network
-model.train(tr_graph, EPOCHS, va_graph)
+model.train(tr_graph, EPOCHS, va_graph, class_weights=class_weights)
 
 #evaluate the network
-iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, class_weights=[1 for i in range(CLASSES)], training=False)
+iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, class_weights=class_weights, training=False)
 
 #calculate results
 TP = [0 for j in range(CLASSES)]
@@ -249,8 +259,11 @@ for i in range(targets.shape[0]):
 			else: TN[j] += 1
 accuracy = [ float(TP[j]+TN[j])/float(TP[j]+TN[j]+FP[j]+FN[j])  for j in range(CLASSES)]
 precision = [ float(TP[j])/float(TP[j]+FP[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
-recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
+recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FN[j] > 0 else 0.0 for j in range(CLASSES)]
 global_accuracy = float(sum(TP)+sum(TN))/float(sum(TP)+sum(TN)+sum(FP)+sum(FN))
+
+print("TP = "+str(TP[0])+" , TN = "+str(TN[0]))
+print("FP = "+str(FP[0])+" , FN = "+str(FN[0]))
 
 print("Class Precision:")
 print(precision)

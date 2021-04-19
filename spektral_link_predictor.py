@@ -10,10 +10,11 @@ import tensorflow as tf
 import scipy
 import pickle
 from itertools import product
+from sklearn.preprocessing import MinMaxScaler
 
 import spektral
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.layers import Dense, Dropout, Multiply
 from spektral.layers import GCNConv
 from spektral.transforms import GCNFilter
 from spektral.data import Graph
@@ -23,12 +24,17 @@ from spektral.utils import gcn_filter
 from tensorflow import gather 
 
 #network parameters
-EPOCHS = 2                #number of training epochs
+EPOCHS = 50                	#number of training epochs
 LR = 0.001					#learning rate
 THRESHOLD = 0.001			#state convergence threshold, in terms of relative state difference
 MAX_ITER = 6				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
+CLASSES = 2					#number of output classes
+
+#gpu parameters
+use_gpu = True
+target_gpu = "1"
 
 #script parameters
 run_id = sys.argv[1]
@@ -42,27 +48,6 @@ atomic_number = { 'Li':3, 'B':5, 'C':6, 'N':7, 'O':8, 'F':9, 'Mg':12, 'Al':13, '
 atomic_label = { 3:'Li', 5:'B', 6:'C', 7:'N', 8:'O', 9:'F', 12:'Mg', 13:'Al', 15:'P', 16:'S', 17:'Cl', 19:'K' ,20:'Ca', 26:'Fe', 27:'Co', 33:'As', 35:'Br', 53:'I', 79:'Au' }
 label_translator = {'C':1, 'N':2, 'O':3, 'S':4, 'F':5, 'P':6, 'Cl':7, 'I':7, 'Br':7, 'Ca':8, 'Mg':8, 'K':8, 'Li':8, 'Co':8, 'As':8, 'B':8, 'Al':8, 'Au':8, 'Fe':8}
 
-#function that translates a nx_graph into a graph_object
-def NXtoGO(nx_graph, target):
-	nodes = np.zeros((len(nx_graph.nodes), 8))
-	arcs = list()
-	targets = np.reshape(target, (1,10))
-	for i in range(len(nx_graph.nodes)):
-		nodes[i][label_translator[nx_graph.nodes[i]['info']]-1] = 1
-	for n1,n2 in nx_graph.edges:
-		label = [n1, n2, 0, 0, 0, 0]
-		label[nx_graph.edges[n1,n2]['info']+1] = 1
-		arcs.append(label)
-		label = [n2, n1, 0, 0, 0, 0]
-		label[nx_graph.edges[n1,n2]['info']+1] = 1
-		arcs.append(label)
-	#skip graphs without edges
-	if not arcs:
-		return None
-	arcs = np.array(arcs)
-	node_graph = np.ones((nodes.shape[0],1))
-	return GraphObject(arcs,nodes,targets,'g',NodeGraph=node_graph)
-
 #definition of GNN Model Class
 class LinkPredictor(Model):
 
@@ -73,9 +58,9 @@ class LinkPredictor(Model):
 		#define list of convolutional layers
 		self.graph_conv = list()
 		for h in list_hidden:
-			self.graph_conv.append(GCNConv(h))
+			self.graph_conv.append(GCNConv(h, activation="sigmoid"))
 		self.dense = Dense(units_dense,"relu")
-		self.output_layer = Dense(1,'sigmoid')
+		self.output_layer = Dense(2,'softmax')
 
 	#call predictor on input data
 	def call(self, inputs):
@@ -85,46 +70,54 @@ class LinkPredictor(Model):
 		set_mask = inputs[3] #training/validation/test mask
 		#transform adjacency matrix into a sparse tensor
 		#adjacency = tf.sparse.from_dense(adjacency)
+		print(node_state)
+		print(node_state.shape)
 		#call every convolutional layer
 		for gc in self.graph_conv:
-			node_state = gc(node_state, adjacency)
+			node_state = gc((node_state, adjacency))
+			print(node_state)
+			print(node_state.shape)
+			sys.exit()
 		#transform node states to edge states
-		edge_state = tf.concat((gather(node_state, out_edges[:,0]),gather(node_state, out_edges[:,1])), axis = 1)
+		edge_state = tf.concat((tf.gather(node_state[0], out_edges[:,0]),tf.gather(node_state[0], out_edges[:,1])), axis = 1)
+		print(edge_state)
 		#apply set mask
-		edge_state_set = tf.boolean_mask(edge_state, set_mask)
+		edge_state_set = tf.boolean_mask(edge_state,set_mask[:,0])
+		print(edge_state_set)
 		#apply dense layer
 		out = self.dense(edge_state_set)
+		print(out)
 		out = self.output_layer(out)
+		print(out)
 		return out
 
 #custom dataset class
 class CustomDataset(Dataset):
 
-	def __init__(self, adjacency, nodes, arcs, targets, out_edges, **kwargs):
+	def __init__(self, adjacency, nodes, arcs, targets, out_edges, set_mask, **kwargs):
 		self.adjacency = adjacency
 		self.nodes = nodes
 		self.arcs = arcs
 		self.targets = targets
 		self.out_edges = out_edges
+		self.set_mask = set_mask
 		super().__init__(**kwargs)
 
 	def read(self):
 		g = Graph(a=self.adjacency, e=self.arcs, x=self.nodes, y=self.targets)
-		g.out_edges = out_edges
+		g.out_edges = self.out_edges
+		g.set_mask = self.set_mask
 		return [g]
 
 #custom loader class
 class CustomLoader(SingleLoader):
-	
-	def __init__(self, dataset, epochs, sample_weights, set_mask):
-		self.set_mask = set_mask
-		super().__init__(dataset, epochs, sample_weights)
-	
+		
 	def collate(self, batch):
-		coo_mat = batch[0].a.tocoo()
-		indices = np.mat([coo_mat.row, coo_mat.col]).transpose()
-		adj = tf.SparseTensor(indices, coo_mat.data, coo_mat.shape)
-		return ([batch[0].x], [adj], batch[0].out_edges, self.set_mask), batch[0].y
+		return ([batch[0].x], [batch[0].a], batch[0].out_edges, batch[0].set_mask), batch[0].y
+
+#set target gpu as the only visible device
+if use_gpu:
+	os.environ["CUDA_VISIBLE_DEVICES"]=target_gpu
 
 #load side-effect data
 in_file = open(path_data+"side_effects.pkl", 'rb')
@@ -191,14 +184,21 @@ for i in pubchem_data.index:
 	nodes[nn][5] = float(pubchem_data.at[i,'hbondacc'])#hydrogen bond acceptors
 	nodes[nn][6] = float(pubchem_data.at[i,'rotbonds'])#number of rotatable bonds
 
+#normalize node features
+print("Normalizing node features")
+scaler = MinMaxScaler()
+scaler.fit(nodes)
+nodes = scaler.transform(nodes)
+
 #build edge mask
 edge_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), np.ones(len(drugs)*len(side_effects), dtype=int)), axis=0)
 #build target tensor
-targets = np.zeros(len(drugs)*len(side_effects))
+targets = np.concatenate( ( np.zeros((len(drugs)*len(side_effects), 1)), np.ones((len(drugs)*len(side_effects), 1)) ), axis=1) # [1,0] -> positive ; [0,1] -> negative (creates a vector of default negative targets, then modify positive ones only)
 for p in positive_dsa_list:
 	#each drug d has a block of len(side_effects) indices starting at (node_number[d]*len(side_effects)). The single side effect s has an offset equal to node_number[s]-len(drugs) inside this block (len(drugs) is subtracted because side effect node numbers are after drug node numbers, so that side effect #3 will have node number equal to len(drugs)+3)
 	k = p[0]*len(side_effects) + p[1]-len(drugs)
-	targets[k] = 1
+	targets[k][0] = 1
+	targets[k][1] = 0
 #build adjacency matrix and list of output edges
 out_edges = list()
 adj_data = np.ones(n_edges, dtype=int)
@@ -231,56 +231,60 @@ for i in range(len(drugs)):
 		out_edges.append([node_number[str(drugs[i])], node_number[str(side_effects[j])]])
 print("")
 out_edges = np.array(out_edges)
-adjacency = scipy.sparse.coo_matrix((adj_data, (adj_row, adj_col)))
+adjacency = gcn_filter(np.array(scipy.sparse.coo_matrix((adj_data, (adj_row, adj_col)), dtype=np.float32).todense()))
 
 #split the dataset
-validation_size = int(validation_share*len(targets))
-test_size = int(test_share*len(targets))
-index = np.array(list(range(len(targets))))
+validation_size = int(validation_share*targets.shape[0])
+test_size = int(test_share*targets.shape[0])
+index = np.array(list(range(targets.shape[0])))
 np.random.shuffle(index)
 test_index = index[:test_size]
 validation_index = index[test_size:test_size+validation_size]
 training_index = index[test_size+validation_size:]
-te_mask = np.zeros(len(targets), dtype=int)
-va_mask = np.zeros(len(targets), dtype=int)
-tr_mask = np.zeros(len(targets), dtype=int)
+te_mask = np.zeros(targets.shape[0], dtype=np.bool_)
+va_mask = np.zeros(targets.shape[0], dtype=np.bool_)
+tr_mask = np.zeros(targets.shape[0], dtype=np.bool_)
 for i in test_index:
-	te_mask[i] = 1
+	te_mask[i] = True
 for i in validation_index:
-	va_mask[i] = 1
+	va_mask[i] = True
 for i in training_index:
-	tr_mask[i] = 1
-
+	tr_mask[i] = True
 
 #create spektral dataset object
 print("Packing data")
-dataset = CustomDataset(adjacency, nodes, None, targets, out_edges)
-dataset.apply(GCNFilter())
+tr_dataset = CustomDataset(adjacency, nodes, None, targets[tr_mask], out_edges, tr_mask)
+va_dataset = CustomDataset(adjacency, nodes, None, targets[va_mask], out_edges, va_mask)
+te_dataset = CustomDataset(adjacency, nodes, None, targets[te_mask], out_edges, te_mask)
 #create loader objects
-tr_loader = CustomLoader(dataset, None, None, tr_mask)
-va_loader = CustomLoader(dataset, None, None, va_mask)
-te_loader = CustomLoader(dataset, None, None, te_mask)
+tr_loader = CustomLoader(tr_dataset, None, None)
+va_loader = CustomLoader(va_dataset, None, None)
+te_loader = CustomLoader(te_dataset, None, None)
 
 #build network
 print("Building the network")
 model = LinkPredictor([20,20,20], 30)
-model.compile("Adam","binary_crossentropy")
+model.compile( optimizer=tf.keras.optimizers.Adam(), loss=tf.nn.softmax_cross_entropy_with_logits, metrics=[tf.keras.metrics.Accuracy()], loss_weights=None, weighted_metrics=None, run_eagerly=True)
 
 #train network
 print("Training the network")
 model.fit(tr_loader.load(), steps_per_epoch=tr_loader.steps_per_epoch, epochs=EPOCHS, validation_data=va_loader.load(), validation_steps=1)
 
 #evaluate the network
-iterations, loss, targets, outputs = model.evaluate_single_graph(te_loader.load(), class_weights=[1 for i in range(CLASSES)], training=False)
+outputs = model.predict(te_loader.load(), steps=1)
+
+coso = np.sum(outputs, axis=1)
+print(coso)
 
 #calculate results
+test_targets = targets[te_mask]
 TP = [0 for j in range(CLASSES)]
 TN = [0 for j in range(CLASSES)]
 FP = [0 for j in range(CLASSES)]
 FN = [0 for j in range(CLASSES)]
-for i in range(targets.shape[0]):
+for i in range(test_targets.shape[0]):
 	for j in range(CLASSES):
-		if targets[i][j] > 0.5:
+		if test_targets[i][j] > 0.5:
 			if outputs[i][j] > 0.5: TP[j] += 1
 			else: FN[j] += 1
 		else:
@@ -288,7 +292,7 @@ for i in range(targets.shape[0]):
 			else: TN[j] += 1
 accuracy = [ float(TP[j]+TN[j])/float(TP[j]+TN[j]+FP[j]+FN[j])  for j in range(CLASSES)]
 precision = [ float(TP[j])/float(TP[j]+FP[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
-recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
+recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FN[j] > 0 else 0.0 for j in range(CLASSES)]
 global_accuracy = float(sum(TP)+sum(TN))/float(sum(TP)+sum(TN)+sum(FP)+sum(FN))
 
 print("Class Precision:")
@@ -304,5 +308,4 @@ print(accuracy)
 print("")
 
 print("Global Accuracy:\n"+str(global_accuracy))
-
 
