@@ -166,13 +166,25 @@ class BaseCGNN(ABC):
 		def training_step(gTr: CompositeGraphObject, mean: bool) -> None:
 			""" compute the gradients and apply them """
 			with tf.GradientTape() as tape:
-				iter, loss, *_ = self.evaluate_single_graph(gTr, class_weights, training=True)
+				it, loss, *_ = self.evaluate_single_graph(gTr, class_weights, training=True)
 			wS, wO = self.trainable_variables()
 			dwbS, dwbO = tape.gradient(loss, [wS, wO])
 			# average net_state dw and db w.r.t. the number of iterations
-			if mean: dwbS = [[j / it for j in i] for it, i in zip([iter] if type(iter) != list else iter, dwbS)]
+			if mean: dwbS = [[[k / it for k in j] for j in i] for i in dwbS]
 			# apply gradients
-			zipped = zip([i for j in dwbS + dwbO for i in j], [i for j in wS + wO for i in j])
+			trainables = []
+			gradients = []
+			for i in dwbS:
+				for j in i:
+					gradients = gradients + j
+			for i in dwbO:
+				gradients = gradients + i
+			for i in wS:
+				for j in i:
+					trainables = trainables + j
+			for i in wO:
+				trainables = trainables + i
+			zipped = zip(gradients, trainables)
 			self.optimizer.apply_gradients(zipped)
 
 

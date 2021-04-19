@@ -62,6 +62,14 @@ class CompositeGraphObject:
 						   NodeGraph=self.getNodeGraph(), ArcNode=self.getArcNode())
 
 	# -----------------------------------------------------------------------------------------------------------------
+	def buildAdiacencyMatrix(self):
+		""" Build Adjacency Matrix ADJ of the graph, s.t.  ADJ[i,j]=1 if edge (i,j) exists """
+		from scipy.sparse import coo_matrix
+		values = np.ones(self.arcs.shape[0], dtype=np.float32)
+		indices = self.arcs[:, :2].astype(int)
+		return coo_matrix((values, (indices[:, 0], indices[:, 1])), shape=(len(self.nodes), len(self.nodes)), dtype=np.float32)
+
+	# -----------------------------------------------------------------------------------------------------------------
 	def buildNodeGraph(self) -> np.array:
 		""" Build Node-Graph Aggregation Matrix, to transform a node-based problem in a graph-based one.
 		It has dimensions (nodes.shape[0], 1) for one graph, or (nodes.shape[0], Num graphs) for a graph containing

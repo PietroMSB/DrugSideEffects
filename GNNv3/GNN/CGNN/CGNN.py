@@ -21,7 +21,6 @@ class CGNNnodeBased(BaseCGNN):
 	def __init__(self,
 				 net_state_list: list[tf.keras.models.Sequential],
 				 net_output: tf.keras.models.Sequential,
-				 output_activation: Optional[tf.function],
 				 optimizer: tf.keras.optimizers.Optimizer,
 				 loss_function: tf.keras.losses.Loss,
 				 loss_arguments: Optional[dict],
@@ -40,7 +39,6 @@ class CGNNnodeBased(BaseCGNN):
 		:param optimizer: (tf.keras.optimizers) for gradient application, initialized externally
 		:param loss_function: (tf.keras.losses) or (tf.function) for the loss computation
 		:param loss_arguments: (dict) with some {'argument':values} one could pass to loss when computed
-		:param output_activation: (tf.keras.activation) function in case net_output.layers[-1] is 'linear'
 		:param max_iteration: (int) max number of iteration for the unfolding procedure (to reach convergence)
 		:param path_writer: (str) path for saving TensorBoard objects
 		:param addressed_problem: (str) in ['r','c'], 'r':regression, 'c':classification for the addressed problem
@@ -63,9 +61,6 @@ class CGNNnodeBased(BaseCGNN):
 		self.state_init_stdev = state_init_stdev
 		self.type_label_lengths = type_label_lengths
 		self.type_offsets = tf.constant(np.subtract(self.type_label_lengths, np.max(self.type_label_lengths)))
-		
-		# check last activation function: in case loss works with logits, it is set by <output_activation> parameter
-		self.output_activation = tf.keras.activations.linear if output_activation is None else output_activation
 
 	# -----------------------------------------------------------------------------------------------------------------
 	def copy(self, *, path_writer: str = '', namespace: str = '', copy_weights: bool = True) -> Union['GNN', 'GNNedgeBased', 'GNNgraphBased', 'GNN2']:
@@ -83,7 +78,7 @@ class CGNNnodeBased(BaseCGNN):
 				netS[i].set_weights(self.net_state_list[i].get_weights())
 			netO.set_weights(self.net_output.get_weights())
 		return self.__class__(net_state_list=netS, net_output=netO, optimizer=self.optimizer.__class__(**self.optimizer.get_config()),
-							  loss_function=self.loss_function, loss_arguments=self.loss_args, output_activation=self.output_activation,
+							  loss_function=self.loss_function, loss_arguments=self.loss_args,
 							  max_iteration=self.max_iteration, addressed_problem=self.addressed_problem,
 							  extra_metrics=self.extra_metrics, extra_metrics_arguments=self.mt_args, 
 							  state_vect_dim=self.state_vect_dim, type_label_lengths=self.type_label_lengths,
@@ -103,34 +98,31 @@ class CGNNnodeBased(BaseCGNN):
 	def set_weights(self, weights_state: list[list[list[array]]], weights_output: list[list[array]]) -> None:
 		assert len(weights_state) == len(self.net_state_list)
 		assert len(weights_output) == 1
-		for i in range(len(self.list_net_state)):
-			list_net_state[i].set_weights(weights_state[i][0])
+		for i in range(len(self.net_state_list)):
+			self.net_state_list[i].set_weights(weights_state[i][0])
 		self.net_output.set_weights(weights_output[0])
 
 
 	## CALL/PREDICT METHOD ############################################################################################
 	def __call__(self, g: GraphObject) -> tf.Tensor:
 		""" return ONLY the GNN output in test mode (training == False) for graph g of type GraphObject """
-		out = self.Loop(g, training=False)[-1]
-		return self.output_activation(out)
+		return self.Loop(g, training=False)[-1]
 
 
 	## LOOP METHODS ###################################################################################################
 	# @tf.function
-	def type_loop_condition(self, i, *args):
+	def type_loop_condition(self, i, *args) -> tf.bool:
 		""" Boolean function for type sub-loop condition """
 		#check the number of types processed
 		return tf.less(i, len(self.net_state_list))
 
 	# -----------------------------------------------------------------------------------------------------------------
 	# @tf.function
-	def type_loop_body(self, i, out_state, out_index, type_mask, inp_state, inp_index, training):
+	def type_loop_body(self, i, out_state, out_index, type_mask, inp_state, inp_index, training) -> tuple:
 		""" Loop body function for type sub-loop """
 		# apply i-th column of type_mask to input
 		ith_input = tf.boolean_mask(inp_state, type_mask[:,i], axis=0)
 		# apply i-th column of type_mask to index
-		print(type_mask.shape)
-		print(type_mask[:,i].shape)
 		ith_index = tf.boolean_mask(inp_index, type_mask[:,i], axis=0)
 		# trim i-th input tensor in accordance to the length of the label of that type of node (state len + message len + type label len)
 		ith_input = ith_input[:,:self.type_offsets[i]]
@@ -141,7 +133,7 @@ class CGNNnodeBased(BaseCGNN):
 		# concatenate i-th index to <out_index>
 		out_index = tf.concat((out_index, ith_index), axis=0)
 		# return
-		return i+1, type_mask, inp_state, out_state, inp_index, out_index, training
+		return i+1, out_state, out_index, type_mask, inp_state, inp_index, training 
 	
 	# -----------------------------------------------------------------------------------------------------------------
 	# @tf.function
@@ -165,9 +157,6 @@ class CGNNnodeBased(BaseCGNN):
 		
 		# concatenate the destination node 'old' states to the incoming messages
 		inp_state = tf.concat((state, message, nodes), axis=1)
-		print(inp_state.shape)
-		print(tf.range(inp_state.shape[0]).shape)
-		print(tf.transpose(tf.range(inp_state.shape[0])).shape)
 		# define index vector to allow the reconstruction of the state tensor
 		inp_index = tf.transpose(tf.range(inp_state.shape[0]))
 		
@@ -188,7 +177,7 @@ class CGNNnodeBased(BaseCGNN):
 		state_new = tf.gather(out_state, sorted_index, axis=0)
 
 		#return
-		return k + 1, state_new, state, nodes, nodes_index, arcs_label, arcnode, training
+		return k + 1, state_new, state, nodes, type_mask, nodes_index, arcs_label, arcnode, training
 
 	# -----------------------------------------------------------------------------------------------------------------
 	# @tf.function
@@ -248,18 +237,14 @@ class CGNNedgeBased(CGNNnodeBased):
 	def apply_filters(self, state_converged, nodes, nodes_index, arcs_label, mask) -> tf.Tensor:
 		""" takes only arcs info of those with output_mask==1 AND belonging to set (in case Dataset == 1 Graph) """
 		if self.state_vect_dim: state_converged = tf.concat((nodes, state_converged), axis=1)
-		
 		# gather source nodes state
 		source_state = tf.gather(state_converged, nodes_index[:, 0])
 		source_state = tf.cast(source_state, tf.float32)
-		
 		# gather destination nodes state
 		destination_state = tf.gather(state_converged, nodes_index[:, 1])
 		destination_state = tf.cast(destination_state, tf.float32)
-		
 		# concatenate source and destination states to arc labels
 		arc_state = tf.concat([source_state, destination_state, arcs_label], axis=1)
-		
 		# takes only arcs states for those with output_mask==1 AND belonging to the set (in case Dataset == 1 Graph)
 		return tf.boolean_mask(arc_state, mask)
 
