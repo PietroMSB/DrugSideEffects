@@ -15,3 +15,23 @@ Graph Convolution Networks are implemented with Spektral:
 Both packages require Tensorflow to run:
 [cita]
 [link]
+
+# Data Sources
+
+The graph was built according to data coming from multiple sources. 
+
+Gene-Gene links were determined according to the HUman Reference Interactome (HURI):
+[cita]
+[link]
+
+Drug-Gene links were extracted from STITCH:
+[cita]
+[link]
+
+Drug-Side-Effect associations were downloaded from SIDER:
+[cita]
+[link]
+
+Chemical descriptors of drugs were retrieved on PubChem:
+[cita]
+[link]
