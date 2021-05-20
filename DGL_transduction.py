@@ -12,6 +12,9 @@ import pickle
 from itertools import product
 from sklearn.preprocessing import MinMaxScaler
 
+import dgl
+
+
 import spektral
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, Multiply
@@ -29,17 +32,18 @@ LR = 0.001					#learning rate
 THRESHOLD = 0.001			#state convergence threshold, in terms of relative state difference
 MAX_ITER = 6				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
-TRAINING_BATCHES = 1        #number of batches in which the training set should be split
+TRAINING_BATCHES = 7        #number of batches in which the training set should be split
 CLASSES = 2					#number of output classes
 
 #gpu parameters
 use_gpu = True
 target_gpu = "1"
+dgl_device = "cuda:"+target_gpu
 
 #script parameters
 run_id = sys.argv[1]
-path_data = "Datasets/Nuovo/Transduction/Soglia_100/"
-path_results = "Results/Nuovo/LinkPredictor/"+run_id+".txt"
+path_data = "Datasets/D1/Transduction/"
+path_results = "Results/D1/Spektral_"+run_id+".txt"
 splitting_seed = 920305
 validation_share = 0.1
 test_share = 0.1
@@ -65,8 +69,8 @@ class LinkPredictor(Model):
 	def call(self, inputs):
 		node_state = inputs[0][0] #input node features
 		adjacency = inputs[1][0] #input adjacency tensor (previously transformed with GCNFilter())
-		out_edges = inputs[2][0] #output edges
-		set_mask = inputs[3][0] #training/validation/test mask
+		out_edges = inputs[2] #output edges
+		set_mask = inputs[3] #training/validation/test mask
 		#transform adjacency matrix into a sparse tensor
 		#adjacency = tf.sparse.from_dense(adjacency)
 		print(node_state)
@@ -77,42 +81,33 @@ class LinkPredictor(Model):
 			print(node_state)
 			print(node_state.shape)
 		#transform node states to edge states
-		edge_state = tf.concat((tf.gather(node_state[0], out_edges[:,0]),tf.gather(node_state[0], out_edges[:,1])), axis = 1)
+		edge_state = tf.concat((tf.gather(node_state, out_edges[:][0]),tf.gather(node_state, out_edges[:][1])), axis=0)
+		#edge_state = tf.concat((tf.gather(node_state[0], out_edges[:,0]),tf.gather(node_state[0], out_edges[:,1])), axis = 1)
 		print(edge_state)
 		#apply set mask
-		edge_state_set = tf.boolean_mask(edge_state,set_mask[:,0])
+		edge_state_set = tf.boolean_mask(edge_state,set_mask)
 		print(edge_state_set)
 		#apply dense layer
 		out = self.dense(edge_state_set)
 		print(out)
 		out = self.output_layer(out)
 		print(out)
-		sys.exit()
 		return out
 
 #custom dataset class
-class CustomDataset(Dataset):
-
-	def __init__(self, graph_objects, **kwargs):
-		self.num_batches = len(graph_objects)
-		self.gcn_filter = GCNFilter(symmetric=True)
-		self.adjacency = [go.buildAdiacencyMatrix() for go in graph_objects]
-		self.nodes = [go.getNodes() for go in graph_objects]
-		self.arcs = [go.getArcs() for go in graph_objects]
-		self.targets = [go.getTargets() for go in graph_objects]
-		self.out_edges = [go.getArcs()[go.getOutputMask()] for go in graph_objects]
-		self.set_mask = [go.getSetMask() for go in graph_objects]
-		super().__init__(**kwargs)
-
-	def read(self):
-		graphs = list()
-		for i in range(self.num_batches):
-			g = Graph(a=self.adjacency[i], e=self.arcs[i], x=self.nodes[i], y=self.targets[i])
-			g.out_edges = self.out_edges[i]
-			g.set_mask = self.set_mask[i]
-			g = self.gcn_filter(g)
-			graphs.append(g)
-		return graphs
+def GOtoDGL(graph_objects):
+	graphs = list()
+	targets = list()
+	set_masks = list()
+	out_edges = list()
+	for go in graph_objects:
+		out_edges.append(go.getArcs()[go.getOutputMask().astype(bool)])
+		set_masks.append(go.getSetMask()[go.getOutputMask().astype(bool)])
+		g = dgl.graph((go.getArcs()[:][0], go.getArcs()[:][1]), num_nodes = go.getNodes().shape[0])
+		g.nodes.data = go.getNodes()
+		targets.append(go.getTargets())
+		graphs.append(g)
+	return (graphs, out_edges, set_masks, targets)
 
 #custom loader class
 class CustomLoader(BatchLoader):
@@ -137,15 +132,11 @@ for i in range(TRAINING_BATCHES):
 	batch_list_training.append(pickle.load(in_file))
 	in_file.close()
 
-#create spektral dataset objects
+#create dgl graph objects
 print("Packing data")
-tr_dataset = CustomDataset(batch_list_training)
-va_dataset = CustomDataset([batch_validation])
-te_dataset = CustomDataset([batch_test])
-#create loader objects
-tr_loader = CustomLoader(tr_dataset, 1, None, True)
-va_loader = CustomLoader(va_dataset, 1, None, False)
-te_loader = CustomLoader(te_dataset, 1, None, False)
+tr_dataset = GOtoDGL(batch_list_training)
+va_dataset = GOtoDGL([batch_validation])
+te_dataset = GOtoDGL([batch_test])
 
 #build network
 print("Building the network")
