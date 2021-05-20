@@ -5,16 +5,18 @@ This project aims at predicting side effects of drugs based on their chemical an
 # Dependencies
 
 Graph Neural Networks are implemented with the GNN software described here: 
-[cita]
-[link]
+https://github.com/NickDrake117/GNN_tf_2.x
+Niccolò Pancino et al. Graph Neural Networks for the Prediction of Protein-Protein Interfaces, 28th European Symposium on Artificial Neural Networks, Computational Intelligence and Machine Learning.
 
 Graph Convolution Networks are implemented with Spektral:
-[cita]
-[link]
+https://github.com/danielegrattarola/spektral
+Thomas Kipf, Max Welling. Semi-supervised classification with Graph Convolutional Networks, International Conference on Learning Representations, 2017.
+Daniele Grattarola, Cesare Alippi. Graph Neural Networks in TensorFlow and Keras with Spektral. International Conference on Machine Learning, Graph Representation Learning workshop, 2020.
 
 Both packages require Tensorflow to run:
-[cita]
-[link]
+https://www.tensorflow.org/
+Martín Abadi et al. TensorFlow: Large-scale machine learning on heterogeneous systems,
+2015. Software available from tensorflow.org.
 
 # Data Sources
 
