@@ -28,18 +28,25 @@ Martín Abadi et al. TensorFlow: Large-scale machine learning on heterogeneous s
 
 The graph was built according to data coming from multiple sources. 
 
-Gene-Gene links were determined according to the HUman Reference Interactome (HURI):
+* Gene-Gene links were determined according to the HUman Reference Interactome (HURI):
+http://www.interactome-atlas.org/
+
+Katja Luck et al. A reference map of the human binary protein interactome. Nature 580: 402-408, 2020.
+
+* Gene Features were obtained from BioMart:
+https://www.ensembl.org/biomart
+http://www.biomart.org/
+
+Damian Smedley et al. The BioMart community portal: an innovative alternative to large centralized data repositories. Nucleic Acids Research 43(W1):W589-W598, 2015.
+
+* Drug-Gene links were extracted from STITCH:
 [cita]
 [link]
 
-Drug-Gene links were extracted from STITCH:
+* Drug-Side-Effect associations were downloaded from SIDER:
 [cita]
 [link]
 
-Drug-Side-Effect associations were downloaded from SIDER:
-[cita]
-[link]
-
-Chemical descriptors of drugs were retrieved on PubChem:
+* Chemical descriptors of drugs were retrieved on PubChem:
 [cita]
 [link]
