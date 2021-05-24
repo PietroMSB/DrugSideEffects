@@ -65,32 +65,28 @@ class LinkPredictor(Model):
 	def call(self, inputs):
 		node_state = inputs[0][0] #input node features
 		adjacency = inputs[1][0] #input adjacency tensor (previously transformed with GCNFilter())
-		out_edges = inputs[2][0] #output edges
-		set_mask = inputs[3][0] #training/validation/test mask
-		#transform adjacency matrix into a sparse tensor
-		#adjacency = tf.sparse.from_dense(adjacency)
-		print(node_state)
-		print(node_state.shape)
+		out_edges = inputs[2] #output edges
+		set_mask = inputs[3] #training/validation/test mask
+		#print(node_state)
+		#print(node_state.shape)
 		#call every convolutional layer
 		for gc in self.graph_conv:
 			node_state = gc((node_state, adjacency))
-			print(node_state)
-			print(node_state.shape)
+			#print(node_state)
+			#print(node_state.shape)
 		#transform node states to edge states
-		AAA = tf.gather(node_state, out_edges[:][0])
-		BBB = tf.gather(node_state, out_edges[:][1])
-		edge_state = tf.concat((AAA,BBB), axis = 1)
-		#edge_state = tf.concat((tf.gather(node_state[0], out_edges[:,0]),tf.gather(node_state[0], out_edges[:,1])), axis = 1)
+		edge_state = tf.concat((tf.gather(node_state, out_edges[:][0]),tf.gather(node_state, out_edges[:][1])), axis=1)
 		print(edge_state)
+		print(set_mask)
 		#apply set mask
-		edge_state_set = tf.boolean_mask(edge_state,set_mask[:,0])
+		edge_state_set = tf.boolean_mask(edge_state,set_mask)
 		print(edge_state_set)
 		#apply dense layer
 		out = self.dense(edge_state_set)
 		print(out)
 		out = self.output_layer(out)
 		print(out)
-		sys.exit()
+		sys.exit("AJO")
 		return out
 
 #custom dataset class
@@ -98,13 +94,12 @@ class CustomDataset(Dataset):
 
 	def __init__(self, graph_objects, **kwargs):
 		self.num_batches = len(graph_objects)
-		self.gcn_filter = GCNFilter(symmetric=True)
 		self.adjacency = [go.buildAdiacencyMatrix() for go in graph_objects]
 		self.nodes = [go.getNodes() for go in graph_objects]
 		self.arcs = [go.getArcs() for go in graph_objects]
 		self.targets = [go.getTargets() for go in graph_objects]
-		self.out_edges = [go.getArcs()[go.getOutputMask()] for go in graph_objects]
-		self.set_mask = [go.getSetMask() for go in graph_objects]
+		self.out_edges = [go.getArcs()[go.getOutputMask().astype(bool)] for go in graph_objects]
+		self.set_mask = [go.getSetMask()[go.getOutputMask().astype(bool)] for go in graph_objects]
 		super().__init__(**kwargs)
 
 	def read(self):
@@ -113,7 +108,6 @@ class CustomDataset(Dataset):
 			g = Graph(a=self.adjacency[i], e=self.arcs[i], x=self.nodes[i], y=self.targets[i])
 			g.out_edges = self.out_edges[i]
 			g.set_mask = self.set_mask[i]
-			g = self.gcn_filter(g)
 			graphs.append(g)
 		return graphs
 
@@ -145,8 +139,12 @@ print("Packing data")
 tr_dataset = CustomDataset(batch_list_training)
 va_dataset = CustomDataset([batch_validation])
 te_dataset = CustomDataset([batch_test])
+#apply GCN filter
+tr_dataset.apply(GCNFilter())
+va_dataset.apply(GCNFilter())
+te_dataset.apply(GCNFilter())
 #create loader objects
-tr_loader = CustomLoader(tr_dataset, 1, None, True)
+tr_loader = CustomLoader(tr_dataset, 1, None, False)
 va_loader = CustomLoader(va_dataset, 1, None, False)
 te_loader = CustomLoader(te_dataset, 1, None, False)
 
