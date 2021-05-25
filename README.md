@@ -40,8 +40,9 @@ http://www.biomart.org/
 Damian Smedley et al. The BioMart community portal: an innovative alternative to large centralized data repositories. Nucleic Acids Research 43(W1):W589-W598, 2015.
 
 * Drug-Gene links were extracted from STITCH:
-[cita]
-[link]
+http://stitch.embl.de/
+
+Michael Kuhn et al. Interaction networks of chemical and proteins. Nucleic Acids Research 36(Suppl_1):D684-D688, 2008.
 
 * Drug-Side-Effect associations were downloaded from SIDER:
 [cita]
