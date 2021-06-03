@@ -45,9 +45,14 @@ http://stitch.embl.de/
 Michael Kuhn et al. Interaction networks of chemical and proteins. Nucleic Acids Research 36(Suppl_1):D684-D688, 2008.
 
 * Drug-Side-Effect associations were downloaded from SIDER:
-[cita]
-[link]
+http://sideeffects.embl.de/
+
+Michael Kuhn et al. The SIDER database of drugs and side effects. Nucleic Acids Research 44(D1):D1075-D1079, 2016.
 
 * Chemical descriptors of drugs were retrieved on PubChem:
 [cita]
 [link]
+
+* Gene Features were extracted with Biomart:
+[cita]
+[link] 
