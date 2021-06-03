@@ -7,12 +7,35 @@ import pickle
 
 #parameters
 side_effects_occurrences_minimum = 100
+term_type = "PT" #can be either primary (PT) or lowest level (LLT)
 drugs_without_pubchem_features = [143, 146, 1125, 2022, 2094, 2182, 2818, 3043, 3405, 3454, 4585, 4725, 5212, 5647, 60843, 64147, 104758, 110634, 151165, 153941, 219090, 5281007, 5353894, 5353980, 5361912, 5362070, 5381226, 5462337, 5487301, 5488383, 5493381, 6323497, 6918366, 6918430, 9825285, 9846180, 11238823, 11505907, 25880656, 25880664, 40468184, 51508717, 51601240]
 
 #acquire data
 ppi_a = pandas.read_table("PPI_HuRI/HI-union.tsv")
 dpi_a = pandas.read_table("STITCH/dpi_preprocessed.tsv", dtype=np.unicode_)
-dsa_a = pandas.read_table("SIDER/meddra_all_se.tsv")
+dsa_aaa = pandas.read_table("SIDER/meddra_all_se.tsv")
+in_file  = open("Gene_Features/mmvv.pkl", 'rb')
+gene_feature_list = pickle.load(in_file)[:,0]
+in_file.close()
+
+#preprocess dsa table
+print("Preprocessing DSA table: selecting "+term_type+" entries and deleting duplicates")
+row_ind_a = dsa_aaa.values[:,3]==term_type
+dsa_aa = dsa_aaa[row_ind_a]
+#delete duplicate entries
+row_ind_aa = list()
+dsa_dict = dict()
+for i in range(dsa_aa.values.shape[0]):
+	if dsa_aa.values[i][0] not in dsa_dict.keys():
+		dsa_dict[dsa_aa.values[i][0]] = [dsa_aa.values[i][4]]
+		row_ind_aa.append(True)
+	elif dsa_aa.values[i][4] in dsa_dict[dsa_aa.values[i][0]]:
+		row_ind_aa.append(False)
+	else:
+		dsa_dict[dsa_aa.values[i][0]].append(dsa_aa.values[i][4])
+		row_ind_aa.append(True)
+dsa_a = dsa_aa[row_ind_aa]
+print("Removed "+str(len(row_ind_aa)-sum(row_ind_aa))+" duplicate entries")
 
 #print table shapes
 print("PPI table shape: "+str(ppi_a.values.shape))
@@ -23,7 +46,19 @@ print("DSA table shape: "+str(dsa_a.values.shape))
 unique_proteins = np.unique(dpi_a.values[:,1])
 unique_drugs_dpi = np.unique(dpi_a.values[:,0])
 unique_drugs_dsa = np.unique(dsa_a.values[:,0])
-unique_se, counts = np.unique(dsa_a.values[:,2], return_counts=True)
+unique_se, counts = np.unique(dsa_a.values[:,4], return_counts=True)
+
+#filter unique proteins, keeping only genes with features
+print("Preprocessing gene list: selecting only genes with features")
+del_indices = list()
+for i in range(len(unique_proteins)):
+	if unique_proteins[i] not in gene_feature_list:
+		del_indices.append(i)
+unique_proteins = np.delete(unique_proteins, del_indices)
+print("Removed "+str(len(del_indices))+" genes without features")
+
+#removed PPIs of removed genes
+
 
 ### DPI PREPROCESSING START ###
 '''
@@ -79,7 +114,7 @@ print("Removed "+str(discarded)+" side-effects")
 print("Removing drug-Side effect associations of removed side-effects")
 del_indices = []
 for i in range(dsa_a.values.shape[0]):
-	if dsa_a.values[i][2] not in final_se:
+	if dsa_a.values[i][4] not in final_se:
 		del_indices.append(i)
 dsa_b = np.delete(dsa_a.values, del_indices, axis=0)
 print("Removed "+str(len(del_indices))+" drug-side-effect associations")
