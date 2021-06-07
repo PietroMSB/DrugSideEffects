@@ -15,7 +15,6 @@ from GNNv3.GNN.CGNN.composite_graph_class import CompositeGraphObject
 from GNNv3.GNN import GNN_utils as utils
 
 #network parameters
-CLASSES = 2					#number of outputs
 EPOCHS = 500                #number of training epochs
 STATE_DIM = 10				#node state dimension
 STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
@@ -103,6 +102,7 @@ for i in range(len(drugs_pre)):
 	drugs.append(str(int(drugs_pre[i][4:])))
 
 #determine graph dimensions
+CLASSES = len(side_effects)		#number of outputs
 n_nodes = len(drugs)+len(genes)
 n_edges = 2*links_dg.shape[0]+2*links_gg.shape[0]
 dim_node_label = 27
@@ -115,6 +115,9 @@ for i in range(len(drugs)):
 for i in range(len(genes)):
 	node_number[str(genes[i])] = i + len(drugs)
 	type_mask[i + len(drugs)][1] = 1
+
+#build output mask
+output_mask = np.concatenate((np.ones(len(drugs)), np.zeros(len(genes))))
 
 #build list of positive examples
 positive_dsa_list = list()
@@ -144,12 +147,10 @@ for i in range(gene_data.shape[0]):
 	nodes[nn][2+chromosome_dict[gene_data[i,4]]] = float(1)#one-hot encoding of chromosome
 	
 #build target tensor
-targets = np.concatenate( ( np.zeros((len(drugs)*len(side_effects), 1)), np.ones((len(drugs)*len(side_effects), 1)) ), axis=1) # [1,0] -> positive ; [0,1] -> negative (creates a vector of default negative targets, then modify positive ones only)
-for p in positive_dsa_list:
-	#each drug d has a block of len(side_effects) indices starting at (node_number[d]*len(side_effects)). The single side effect s has an offset equal to node_number[s]-len(drugs) inside this block (len(drugs) is subtracted because side effect node numbers are after drug node numbers, so that side effect #3 will have node number equal to len(drugs)+3)
-	k = p[0]*len(side_effects) + p[1]-len(drugs)
-	targets[k][0] = 1
-	targets[k][1] = 0
+targets = np.zeros((len(drugs),len(side_effects)))
+for p in positive_dsa_list:	
+	targets[p[0]][p[1]] = 1
+
 #build arcs tensor
 arcs = np.zeros((n_edges,2), dtype=int)
 l = 0
@@ -163,19 +164,6 @@ for i in range(links_gg.shape[0]):
 	arcs[l][:] = [node_number[str(links_gg[i][0])],node_number[str(links_gg[i][1])]]
 	arcs[l+1][:] = [node_number[str(links_gg[i][1])],node_number[str(links_gg[i][0])]]
 	l = l+2
-#add drug-se edges
-for i in range(len(drugs)):
-	for j in range(len(side_effects)):
-		#side-effect-drug links only exist for message passing
-		arcs[l][:] = [node_number[str(side_effects[j])], node_number[str(drugs[i])]]
-		l = l+1
-for i in range(len(drugs)):
-	for j in range(len(side_effects)):
-		print("Preprocessing Possible Drug-Side Effect Link "+str(i*len(side_effects)+j+1)+" of "+str(len(drugs)*len(side_effects)), end='\r')
-		#drug-side-effect links are the ones on which the prediction is carried out
-		arcs[l][:] = [node_number[str(drugs[i])],node_number[str(side_effects[j])]]
-		l=l+1
-print("")
 arcs = np.array(arcs)
 	
 #split the dataset
@@ -196,12 +184,6 @@ for i in validation_index:
 	va_mask[i] = 1
 for i in training_index:
 	tr_mask[i] = 1
-#concatenate a zero mask for all the non-targeted edges to each set mask
-te_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), te_mask), axis=0)
-va_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), va_mask), axis=0)
-tr_mask = np.concatenate((np.zeros(2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects), dtype=int), tr_mask), axis=0)
-#concatenate a placeholder [0,0]xN vector of targets for non-output nodes
-expanded_targets = np.concatenate((np.zeros((2*links_dg.shape[0]+2*links_gg.shape[0]+len(drugs)*len(side_effects) , 2), dtype=int), targets), axis=0)
 
 ### DEBUG START ###
 '''
@@ -211,16 +193,15 @@ print(expanded_targets.shape)
 print(tr_mask.shape)
 print(va_mask.shape)
 print(te_mask.shape)
-print(edge_mask.shape)
 print(type_mask.shape)
 sys.exit()
 '''
 ### DEBUG STOP ###
 
 #build CompositeGraphObject
-tr_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', tr_mask, edge_mask, type_mask, node_aggregation='average')
-va_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', va_mask, edge_mask, type_mask, node_aggregation='average')
-te_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'a', te_mask, edge_mask, type_mask, node_aggregation='average')
+tr_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'n', tr_mask, output_mask, type_mask, node_aggregation='average')
+va_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'n', va_mask, output_mask, type_mask, node_aggregation='average')
+te_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'n', te_mask, output_mask, type_mask, node_aggregation='average')
 
 #build network
 netSt_drugs = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
@@ -233,17 +214,12 @@ netSt_genes = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], a
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      dropout_percs=[0.2, 0],
                      dropout_pos=[0, 0])
-netSt_sideeffects = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
-                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     dropout_percs=[0.2, 0],
-                     dropout_pos=[0, 0])
 netOut = utils.MLP(input_dim=2*STATE_DIM+2*nodes.shape[1], layers=[15,2], activations=['relu', 'linear'],
                       kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       dropout_percs=[0, 0],
                       dropout_pos=[0, 0])
-model = CGNNedgeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.nn.softmax_cross_entropy_with_logits, state_vect_dim = 10, type_label_lengths=np.array([7,0,0,0]),state_init_stdev=STATE_INIT_STDEV, max_iteration=MAX_ITER, addressed_problem='c', loss_arguments=None)
+model = CompositeGNNnodeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.nn.softmax_cross_entropy_with_logits, state_vect_dim = 10, type_label_lengths=np.array([7,0,0,0]),state_init_stdev=STATE_INIT_STDEV, max_iteration=MAX_ITER, addressed_problem='c', loss_arguments=None)
 
 #train the network
 model.train(tr_graph, EPOCHS, va_graph, class_weights=class_weights)
