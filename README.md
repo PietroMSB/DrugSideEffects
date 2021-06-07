@@ -9,8 +9,12 @@ https://github.com/NickDrake117/GNN_tf_2.x
 
 Niccolò Pancino et al. Graph Neural Networks for the Prediction of Protein-Protein Interfaces, 28th European Symposium on Artificial Neural Networks, Computational Intelligence and Machine Learning.
 
+* Composite Graph Neural Networks are implemented with this repository:
+https://github.com/NickDrake117/CompositeGNN
 
- * Graph Convolution Networks are implemented with Spektral:
+Work in progress
+
+* Graph Convolution Networks are implemented with Spektral:
 https://github.com/danielegrattarola/spektral
 
 Thomas Kipf, Max Welling. Semi-supervised classification with Graph Convolutional Networks, International Conference on Learning Representations, 2017.
@@ -18,7 +22,7 @@ Thomas Kipf, Max Welling. Semi-supervised classification with Graph Convolutiona
 Daniele Grattarola, Cesare Alippi. Graph Neural Networks in TensorFlow and Keras with Spektral. International Conference on Machine Learning, Graph Representation Learning workshop, 2020.
 
 
-* Both packages require Tensorflow to run:
+* All the packages listed above require Tensorflow to run:
 https://www.tensorflow.org/
 
 Martín Abadi et al. TensorFlow: Large-scale machine learning on heterogeneous systems, 2015. Software available from tensorflow.org.
@@ -50,9 +54,6 @@ http://sideeffects.embl.de/
 Michael Kuhn et al. The SIDER database of drugs and side effects. Nucleic Acids Research 44(D1):D1075-D1079, 2016.
 
 * Chemical descriptors of drugs were retrieved on PubChem:
-[cita]
-[link]
+https://pubchem.ncbi.nlm.nih.gov/
 
-* Gene Features were extracted with Biomart:
-[cita]
-[link] 
+Sunghwan Kim et al. PubChem in 2021: new data content and improved web interfaces. Nucleic Acids Research 49(D1):D1388–D1395, 2021. doi:10.1093/nar/gkaa971
