@@ -12,7 +12,7 @@ drugs_without_pubchem_features = [143, 146, 1125, 2022, 2094, 2182, 2818, 3043, 
 
 #acquire data
 ppi_a = pandas.read_table("PPI_HuRI/HI-union.tsv")
-dpi_a = pandas.read_table("STITCH/dpi_preprocessed.tsv", dtype=np.unicode_)
+dpi_aa = pandas.read_table("STITCH/dpi_preprocessed.tsv", dtype=np.unicode_)
 dsa_aaa = pandas.read_table("SIDER/meddra_all_se.tsv")
 in_file  = open("Gene_Features/mmvv.pkl", 'rb')
 gene_feature_list = pickle.load(in_file)[:,0]
@@ -39,14 +39,11 @@ print("Removed "+str(len(row_ind_aa)-sum(row_ind_aa))+" duplicate entries")
 
 #print table shapes
 print("PPI table shape: "+str(ppi_a.values.shape))
-print("DPI table shape: "+str(dpi_a.values.shape))
+print("DPI table shape: "+str(dpi_aa.values.shape))
 print("DSA table shape: "+str(dsa_a.values.shape))
 
-#retrieve unique protein drug and side effect ids
-unique_proteins = np.unique(dpi_a.values[:,1])
-unique_drugs_dpi = np.unique(dpi_a.values[:,0])
-unique_drugs_dsa = np.unique(dsa_a.values[:,0])
-unique_se, counts = np.unique(dsa_a.values[:,4], return_counts=True)
+#retrieve unique protein ids
+unique_proteins = np.unique(dpi_aa.values[:,1])
 
 #filter unique proteins, keeping only genes with features
 print("Preprocessing gene list: selecting only genes with features")
@@ -57,8 +54,30 @@ for i in range(len(unique_proteins)):
 unique_proteins = np.delete(unique_proteins, del_indices)
 print("Removed "+str(len(del_indices))+" genes without features")
 
-#removed PPIs of removed genes
+#remove PPIs of removed genes
+print("Removing PPIs of removed genes")
+del_indices = []
+for i in range(ppi_a.values.shape[0]):
+	if ppi_a.values[i,0] not in unique_proteins or ppi_a.values[i,1] not in unique_proteins:
+		del_indices.append(i)
+ppi_b = np.delete(ppi_a.values, del_indices, axis=0)
+print("Removed "+str(len(del_indices))+" PPIs")
 
+#remove DPIs of removed genes
+print("Removing DPIs of removed genes")
+del_indices = []
+for i in range(dpi_aa.values.shape[0]):
+	print("Processing DPI "+str(i+1)+" of "+str(dpi_aa.values.shape[0]), end = '\r')
+	if dpi_aa.values[i,1] not in unique_proteins:
+		del_indices.append(i)
+dpi_a = np.delete(dpi_aa.values, del_indices, axis=0)
+print("")
+print("Removed "+str(len(del_indices))+" DPIs")
+
+#retrieve unique drug and side effect ids
+unique_drugs_dpi = np.unique(dpi_a[:,0])
+unique_drugs_dsa = np.unique(dsa_a.values[:,0])
+unique_se, counts = np.unique(dsa_a.values[:,4], return_counts=True)
 
 ### DPI PREPROCESSING START ###
 '''
@@ -153,11 +172,11 @@ print("Removed "+str(len(del_indices))+" drug-side-effect associations")
 #filter dpi list using only drugs in <final_drugs>
 print("Removing DPIs of molecules that are outside of this study or that were excluded by filters")
 del_indices = []
-for i in range(dpi_a.values.shape[0]):
-	print("Processing DPI "+str(i+1)+" of "+str(dpi_a.values.shape[0]), end = '\r')
-	if ("CID1"+dpi_a.values[i][0] not in final_drugs):
+for i in range(dpi_a.shape[0]):
+	print("Processing DPI "+str(i+1)+" of "+str(dpi_a.shape[0]), end = '\r')
+	if ("CID1"+dpi_a[i][0] not in final_drugs):
 		del_indices.append(i)
-final_dpi = np.delete(dpi_a.values, del_indices, axis=0)
+final_dpi = np.delete(dpi_a, del_indices, axis=0)
 print("")
 print("Removed "+str(len(del_indices))+" DPIs")
 
@@ -180,11 +199,11 @@ print("Removed "+str(discarded)+" proteins")
 #obtain filtered ppi list
 ("Removing PPIs of removed proteins")
 del_indices = []
-for i in range(ppi_a.values.shape[0]):
-	print("Processing PPI "+str(i+1)+" of "+str(ppi_a.values.shape[0]), end = '\r')
-	if (ppi_a.values[i][0] not in final_proteins) or (ppi_a.values[i][1] not in final_proteins):
+for i in range(ppi_b.shape[0]):
+	print("Processing PPI "+str(i+1)+" of "+str(ppi_b.shape[0]), end = '\r')
+	if (ppi_b[i][0] not in final_proteins) or (ppi_b[i][1] not in final_proteins):
 		del_indices.append(i)
-final_ppi =  np.delete(ppi_a.values, del_indices, axis=0)
+final_ppi =  np.delete(ppi_b, del_indices, axis=0)
 print("")
 print("Removed "+str(len(del_indices))+" PPIs")
 
