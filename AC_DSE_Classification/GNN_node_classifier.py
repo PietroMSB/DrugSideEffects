@@ -10,13 +10,14 @@ import tensorflow as tf
 import scipy
 import pickle
 
-from GNNv3.GNN.CGNN.CGNN import *
-from GNNv3.GNN.CGNN.composite_graph_class import CompositeGraphObject
-from GNNv3.GNN import GNN_utils as utils
+from CompositeGNN import *
+from CompositeGNN.CompositeGNN.CompositeGNN import *
+from CompositeGNN.CompositeGNN import GNN_utils
+from CompositeGNN.CompositeGNN.MLP import *
 
 #network parameters
 EPOCHS = 500                #number of training epochs
-STATE_DIM = 10				#node state dimension
+STATE_DIM = 5				#node state dimension
 STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
 LR = 0.01					#learning rate
 MAX_ITER = 6				#maximum number of state convergence iterations
@@ -29,7 +30,8 @@ target_gpu = "1"
 
 #script parameters
 run_id = sys.argv[1]
-path_data = "Datasets/Nuovo/Output/Soglia_100/"
+#path_data = "Datasets/Nuovo/Output/Soglia_100/"
+path_data = "Datasets/Artificiale/Output/"
 path_results = "Results/Nuovo/LinkPredictor/"+run_id+".txt"
 splitting_seed = 920305
 validation_share = 0.1
@@ -38,7 +40,6 @@ atomic_number = { 'Li':3, 'B':5, 'C':6, 'N':7, 'O':8, 'F':9, 'Mg':12, 'Al':13, '
 atomic_label = { 3:'Li', 5:'B', 6:'C', 7:'N', 8:'O', 9:'F', 12:'Mg', 13:'Al', 15:'P', 16:'S', 17:'Cl', 19:'K' ,20:'Ca', 26:'Fe', 27:'Co', 33:'As', 35:'Br', 53:'I', 79:'Au' }
 label_translator = {'C':1, 'N':2, 'O':3, 'S':4, 'F':5, 'P':6, 'Cl':7, 'I':7, 'Br':7, 'Ca':8, 'Mg':8, 'K':8, 'Li':8, 'Co':8, 'As':8, 'B':8, 'Al':8, 'Au':8, 'Fe':8}
 chromosome_dict = {'MT':0, '1':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, '11':11, '12':12, '13':13, '14':14, '15':15, '16':16, '17':17, '18':18, '19':19, '20':20, '21':21, '22':22, 'X':23, 'Y':24}
-class_weights = [0.8, 0.2]
 
 #function that translates a nx_graph into a graph_object
 def NXtoGO(nx_graph, target):
@@ -60,6 +61,13 @@ def NXtoGO(nx_graph, target):
 	arcs = np.array(arcs)
 	node_graph = np.ones((nodes.shape[0],1))
 	return GraphObject(arcs,nodes,targets,'g',NodeGraph=node_graph)
+
+#custom loss function for multilabel classification
+def multilabel_crossentropy_loss(y, x):
+	element_loss = np.zeros_like(y)
+	for i in range(y.shape[1]):
+		element_loss[:,i] = tf.keras.losses.binary_crossentropy(y[:,i], x[:,i], from_logits=True)
+	return np.sum(element_loss, axis=1)
 
 #set target gpu as the only visible device
 if use_gpu:
@@ -92,7 +100,7 @@ in_file.close()
 #load drug features
 pubchem_data = pandas.read_csv(path_data+"pubchem_output.csv")
 #load gene features
-in_file = open(path_data+"Gene_Features/mmvv.pkl", 'rb')
+in_file = open(path_data+"gene_features.pkl", 'rb')
 gene_data = pickle.load(in_file)
 in_file.close()
 
@@ -103,6 +111,7 @@ for i in range(len(drugs_pre)):
 
 #determine graph dimensions
 CLASSES = len(side_effects)		#number of outputs
+class_weights = [1 for i in range(CLASSES)]
 n_nodes = len(drugs)+len(genes)
 n_edges = 2*links_dg.shape[0]+2*links_gg.shape[0]
 dim_node_label = 27
@@ -123,6 +132,9 @@ output_mask = np.concatenate((np.ones(len(drugs)), np.zeros(len(genes))))
 positive_dsa_list = list()
 for i in range(links_dse.shape[0]):
 	if str(int(links_dse[i][0][4:])) in node_number.keys():
+		#skip side-effects which were filtered out of the dataset
+		if links_dse[i][2] not in node_number.keys():
+			continue
 		positive_dsa_list.append((node_number[str(int(links_dse[i][0][4:]))],node_number[links_dse[i][2]]))
 	else:
 		sys.exit("ERROR: drug-side-effect link pointing to incorrect drug id")
@@ -131,6 +143,9 @@ for i in range(links_dse.shape[0]):
 nodes = np.zeros((n_nodes, dim_node_label))
 #build drug features
 for i in pubchem_data.index:
+	#skip drugs which were filtered out of the dataset
+	if pubchem_data.at[i,'cid'] not in node_number.keys():
+		continue
 	nn = node_number[str(pubchem_data.at[i,'cid'])]
 	nodes[nn][0] = float(pubchem_data.at[i,'mw'])#molecular weight
 	nodes[nn][1] = float(pubchem_data.at[i,'polararea'])#polar area
@@ -139,8 +154,12 @@ for i in pubchem_data.index:
 	nodes[nn][4] = float(pubchem_data.at[i,'hbonddonor'])#hydrogen bond donors
 	nodes[nn][5] = float(pubchem_data.at[i,'hbondacc'])#hydrogen bond acceptors
 	nodes[nn][6] = float(pubchem_data.at[i,'rotbonds'])#number of rotatable bonds
+
 #build gene features
 for i in range(gene_data.shape[0]):
+	#skip genes which were filtered out of the dataset
+	if gene_data[i,0] not in node_number.keys():
+		continue
 	nn = node_number[gene_data[i,0]]
 	nodes[nn][0] = float(gene_data[i,1])#dna strand (-1 or +1)
 	nodes[nn][1] = float(gene_data[i,2])#percent GC content (real value in [0,1])
@@ -155,7 +174,7 @@ for p in positive_dsa_list:
 arcs = np.zeros((n_edges,2), dtype=int)
 l = 0
 #add drug-gene edges
-for i in range(links_dg.shape[0]):
+for i in range(links_dg.shape[0]): 
 	arcs[l][:] = [node_number[str(int(links_dg[i][0]))],node_number[str(links_dg[i][1])]]
 	arcs[l+1][:] = [node_number[str(links_dg[i][1])],node_number[str(int(links_dg[i][0]))]]
 	l = l+2
@@ -184,6 +203,10 @@ for i in validation_index:
 	va_mask[i] = 1
 for i in training_index:
 	tr_mask[i] = 1
+#concatenate all-zero set mask extensions for gene nodes
+te_mask = np.concatenate((te_mask,np.zeros(len(genes), dtype=int)))
+va_mask = np.concatenate((va_mask,np.zeros(len(genes), dtype=int)))
+tr_mask = np.concatenate((tr_mask,np.zeros(len(genes), dtype=int)))
 
 ### DEBUG START ###
 '''
@@ -199,27 +222,22 @@ sys.exit()
 ### DEBUG STOP ###
 
 #build CompositeGraphObject
-tr_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'n', tr_mask, output_mask, type_mask, node_aggregation='average')
-va_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'n', va_mask, output_mask, type_mask, node_aggregation='average')
-te_graph = CompositeGraphObject(arcs, nodes, expanded_targets, 'n', te_mask, output_mask, type_mask, node_aggregation='average')
+tr_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', tr_mask, output_mask, aggregation_mode='average')
+va_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', va_mask, output_mask, aggregation_mode='average')
+te_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', te_mask, output_mask, aggregation_mode='average')
 
 #build network
-netSt_drugs = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
+netSt_drugs = MLP(input_dim=51, layers=[15, STATE_DIM], activations=['relu', 'relu'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     dropout_percs=[0.2, 0],
-                     dropout_pos=[0, 0])
-netSt_genes = utils.MLP(input_dim=2*STATE_DIM+nodes.shape[1], layers=[15, 10], activations=['relu', 'relu'],
+                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
+netSt_genes = MLP(input_dim=71, layers=[15, STATE_DIM], activations=['relu', 'relu'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     dropout_percs=[0.2, 0],
-                     dropout_pos=[0, 0])
-netOut = utils.MLP(input_dim=2*STATE_DIM+2*nodes.shape[1], layers=[15,2], activations=['relu', 'linear'],
+                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
+netOut = MLP(input_dim=5, layers=[15,CLASSES], activations=['relu', 'sigmoid'],
                       kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                      dropout_percs=[0, 0],
-                      dropout_pos=[0, 0])
-model = CompositeGNNnodeBased([netSt_drugs, netSt_sideeffects, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.nn.softmax_cross_entropy_with_logits, state_vect_dim = 10, type_label_lengths=np.array([7,0,0,0]),state_init_stdev=STATE_INIT_STDEV, max_iteration=MAX_ITER, addressed_problem='c', loss_arguments=None)
+                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
+#model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = multilabel_crossentropy_loss, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
+model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.MSE, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
 
 #train the network
 model.train(tr_graph, EPOCHS, va_graph, class_weights=class_weights)
