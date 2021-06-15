@@ -243,13 +243,13 @@ class CompositeBaseClass(ABC):
             # average net_state dw and db w.r.t. the number of iteration.
             if not isinstance(iter, list): iter = [iter]
             assert len(dwbS) == len(dwbO) == len(wS) == len(wO) == len(iter)
-            if mean: dwbS = [[[elem/it for elem in type] for type in layer] for it, layer in zip(iter, dwbS)]
+            if mean: dwbS = [[[elem / it for elem in type] for type in layer] for it, layer in zip(iter, dwbS)]
             assert len(dwbS) == len(dwbO) == len(wS) == len(wO) == len(iter)
 
             # apply gradients
-            #zipped1 = zip([i for j in dwbS + dwbO for i in j], [i for j in wS + wO for i in j])
+            # zipped1 = zip([i for j in dwbS + dwbO for i in j], [i for j in wS + wO for i in j])
             list_dwb = [elem for layer in dwbS for type in layer for elem in type] + [elem for layer in dwbO for elem in layer]
-            list_wb =  [elem for layer in wS for type in layer for elem in type] + [elem for layer in wO for elem in layer]
+            list_wb = [elem for layer in wS for type in layer for elem in type] + [elem for layer in wO for elem in layer]
             zipped = zip(list_dwb, list_wb)
             self.optimizer.apply_gradients(zipped)
 
@@ -365,7 +365,8 @@ class CompositeBaseClass(ABC):
         return metricsTe
 
     ## K-FOLD CROSS VALIDATION METHOD #################################################################################
-    def LKO(self, batches: tuple[Union[list[CompositeGraphTensor], list[list[CompositeGraphTensor]]], list[CompositeGraphTensor], Optional[list[CompositeGraphTensor]]],
+    def LKO(self, batches: tuple[Union[list[CompositeGraphTensor], list[list[CompositeGraphTensor]]], list[CompositeGraphTensor], Optional[
+        list[CompositeGraphTensor]]],
             epochs: int = 500, training_mode=None, update_freq: int = 10, max_fails: int = 10,
             observed_metric: str = 'Loss', policy='min',
             mean: bool = True, verbose: int = 3) -> dict[str, list[float]]:
@@ -409,16 +410,15 @@ class CompositeBaseClass(ABC):
 
     ## STATIC METHODs #################################################################################################
     @staticmethod
-    def get_graph_target(g: Union[CompositeGraphObject, CompositeGraphTensor]):
-        """ Get targets for node-based or edge-based problems: nodes states are filtered by set_mask and output_mask """
-        targs = tf.constant(g.targets, dtype='float32')
+    def get_filtered_tensor(g: CompositeGraphTensor, inp: tf.Tensor):
+        """ Get inp [targets or sample_weights] for graph based problems -> nodes states are not filtered by set_mask and output_mask """
         mask = tf.boolean_mask(g.set_mask, g.output_mask)
-        return tf.boolean_mask(targs, mask)
+        return tf.boolean_mask(inp, mask)
 
     # -----------------------------------------------------------------------------------------------------------------
     @staticmethod
     def checktype(elem: Optional[Union[CompositeGraphObject, CompositeGraphTensor, list[CompositeGraphObject, CompositeGraphTensor]]]) -> \
-    list[CompositeGraphTensor]:
+            list[CompositeGraphTensor]:
         """ check if type(elem) is correct. If so, return None or a list og GraphObjects """
         if elem is None:
             pass

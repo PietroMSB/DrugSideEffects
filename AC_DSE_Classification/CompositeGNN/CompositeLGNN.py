@@ -60,9 +60,6 @@ class CompositeLGNN(CompositeBaseClass):
             gnn.namespace = [name]
             gnn.path_writer = f'{self.path_writer}{name}/'
 
-    def get_graph_target(self, g):
-        return self.GNNS_TYPE.get_graph_target(g)
-
     # -----------------------------------------------------------------------------------------------------------------
     def copy(self, *, path_writer: str = '', namespace: str = '', copy_weights: bool = True) -> 'LGNN':
         """ COPY METHOD
@@ -204,17 +201,18 @@ class CompositeLGNN(CompositeBaseClass):
         # transform CompositeGraphObject in CompositeGraphTensor
         if isinstance(g, CompositeGraphObject): g = CompositeGraphTensor.fromGraphObject(g)
 
-        # get targets
-        targs = self.get_graph_target(g)
+        # get targets and loss_weights
+        targs = self.GNNS_TYPE.get_filtered_tensor(g, g.targets)
+        loss_weights = self.GNNS_TYPE.get_filtered_tensor(g, g.sample_weights)
 
         # graph processing
         it, _, out = self.Loop(g, training=training)
 
-        # if class_metrics != 1, else it does not modify loss values
+        # loss computation
         if training and self.training_mode == 'residual':
-            loss = self.loss_function(targs, tf.reduce_mean(out, axis=0), **self.loss_args) * g.sample_weights
+            loss = self.loss_function(targs, tf.reduce_mean(out, axis=0), **self.loss_args) * loss_weights
         else:
-            loss = tf.reduce_mean([self.loss_function(targs, o, **self.loss_args) * g.sample_weights for o in out], axis=0)
+            loss = tf.reduce_mean([self.loss_function(targs, o, **self.loss_args) * loss_weights for o in out], axis=0)
 
         return it, loss, targs, out[-1]
 

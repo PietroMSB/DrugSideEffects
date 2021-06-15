@@ -190,13 +190,15 @@ class CompositeGNNnodeBased(CompositeBaseClass):
         if isinstance(g, CompositeGraphObject): g = CompositeGraphTensor.fromGraphObject(g)
 
         # get targets
-        targs = self.get_graph_target(g)
+        targs = self.get_filtered_tensor(g, g.targets)
+        loss_weights = self.get_filtered_tensor(g, g.sample_weights)
 
         # graph processing
         it, _, out = self.Loop(g, training=training)
 
-        # if class_metrics != 1, else it does not modify loss values
-        loss = self.loss_function(targs, out, **self.loss_args) * tf.boolean_mask(g.sample_weights, tf.boolean_mask(g.set_mask, g.output_mask))
+        # loss computation
+        loss = self.loss_function(targs, out, **self.loss_args) * loss_weights
+
         return it, loss, targs, out
 
     ## LOOP METHODS ###################################################################################################
@@ -313,9 +315,9 @@ class CompositeGNNgraphBased(CompositeGNNnodeBased):
 
     # -----------------------------------------------------------------------------------------------------------------
     @staticmethod
-    def get_graph_target(g: Union[CompositeGraphObject, CompositeGraphTensor]):
-        """ Get targets for graph based problems -> nodes states are not filtered by set_mask and output_mask """
-        return tf.constant(g.targets, dtype='float32')
+    def get_filtered_tensor(g: CompositeGraphTensor, inp: tf.Tensor):
+        """ Get inp [targets or sample_weights] for graph based problems -> nodes states are not filtered by set_mask and output_mask """
+        return tf.constant(inp, dtype='float32')
 
     # -----------------------------------------------------------------------------------------------------------------
     def Loop(self, g: Union[CompositeGraphObject, CompositeGraphTensor], *, training: bool = False) -> tuple[int, tf.Tensor, tf.Tensor]:
