@@ -11,18 +11,19 @@ import scipy
 import pickle
 
 from CompositeGNN import *
-from CompositeGNN.CompositeGNN.CompositeGNN import *
-from CompositeGNN.CompositeGNN import GNN_utils
-from CompositeGNN.CompositeGNN.MLP import *
+from CompositeGNN.CompositeGNN import *
+from CompositeGNN import GNN_utils
+from CompositeGNN.MLP import *
 
 #network parameters
-EPOCHS = 500                #number of training epochs
-STATE_DIM = 5				#node state dimension
+EPOCHS = 2000               #number of training epochs
+STATE_DIM = 10				#node state dimension
 STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
-LR = 0.01					#learning rate
-MAX_ITER = 6				#maximum number of state convergence iterations
+LR = 0.001					#learning rate
+MAX_ITER = 4				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
+LABEL_DIM = [7, 27]
 
 #gpu parameters
 use_gpu = True
@@ -30,8 +31,8 @@ target_gpu = "1"
 
 #script parameters
 run_id = sys.argv[1]
-#path_data = "Datasets/Nuovo/Output/Soglia_100/"
-path_data = "Datasets/Artificiale/Output/"
+path_data = "Datasets/Nuovo/Output/Soglia_100/"
+#path_data = "Datasets/Artificiale/Output/"
 path_results = "Results/Nuovo/LinkPredictor/"+run_id+".txt"
 splitting_seed = 920305
 validation_share = 0.1
@@ -63,11 +64,13 @@ def NXtoGO(nx_graph, target):
 	return GraphObject(arcs,nodes,targets,'g',NodeGraph=node_graph)
 
 #custom loss function for multilabel classification
+'''
 def multilabel_crossentropy_loss(y, x):
 	element_loss = np.zeros_like(y)
 	for i in range(y.shape[1]):
-		element_loss[:,i] = tf.keras.losses.binary_crossentropy(y[:,i], x[:,i], from_logits=True)
+		element_loss[:,i] = tf.keras.losses.MSE(y[:,i], x[:,i])
 	return np.sum(element_loss, axis=1)
+'''
 
 #set target gpu as the only visible device
 if use_gpu:
@@ -111,7 +114,6 @@ for i in range(len(drugs_pre)):
 
 #determine graph dimensions
 CLASSES = len(side_effects)		#number of outputs
-class_weights = [1 for i in range(CLASSES)]
 n_nodes = len(drugs)+len(genes)
 n_edges = 2*links_dg.shape[0]+2*links_gg.shape[0]
 dim_node_label = 27
@@ -124,6 +126,10 @@ for i in range(len(drugs)):
 for i in range(len(genes)):
 	node_number[str(genes[i])] = i + len(drugs)
 	type_mask[i + len(drugs)][1] = 1
+#build id -> class number mappings
+class_number = dict()
+for i in range(len(side_effects)):
+	class_number[side_effects[i]] = i
 
 #build output mask
 output_mask = np.concatenate((np.ones(len(drugs)), np.zeros(len(genes))))
@@ -133,9 +139,9 @@ positive_dsa_list = list()
 for i in range(links_dse.shape[0]):
 	if str(int(links_dse[i][0][4:])) in node_number.keys():
 		#skip side-effects which were filtered out of the dataset
-		if links_dse[i][2] not in node_number.keys():
+		if links_dse[i][2] not in side_effects:
 			continue
-		positive_dsa_list.append((node_number[str(int(links_dse[i][0][4:]))],node_number[links_dse[i][2]]))
+		positive_dsa_list.append((node_number[str(int(links_dse[i][0][4:]))],class_number[links_dse[i][2]]))
 	else:
 		sys.exit("ERROR: drug-side-effect link pointing to incorrect drug id")
 
@@ -227,23 +233,22 @@ va_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', va
 te_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', te_mask, output_mask, aggregation_mode='average')
 
 #build network
-netSt_drugs = MLP(input_dim=51, layers=[15, STATE_DIM], activations=['relu', 'relu'],
-                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
-netSt_genes = MLP(input_dim=71, layers=[15, STATE_DIM], activations=['relu', 'relu'],
-                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
-                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
-netOut = MLP(input_dim=5, layers=[15,CLASSES], activations=['relu', 'sigmoid'],
+netSt_drugs = MLP(input_dim=2*STATE_DIM+LABEL_DIM[0]+sum(LABEL_DIM), layers=[STATE_DIM], activations=['relu'],
+                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
+                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)])
+netSt_genes = MLP(input_dim=2*STATE_DIM+LABEL_DIM[1]+sum(LABEL_DIM), layers=[STATE_DIM], activations=['relu'],
+                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
+                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)])
+netOut = MLP(input_dim=STATE_DIM, layers=[15,CLASSES], activations=['relu', 'sigmoid'],
                       kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
-#model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = multilabel_crossentropy_loss, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
-model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.MSE, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
+model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.binary_crossentropy, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
 
 #train the network
-model.train(tr_graph, EPOCHS, va_graph, class_weights=class_weights)
+model.train(tr_graph, EPOCHS, va_graph)
 
 #evaluate the network
-iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, class_weights=class_weights, training=False)
+iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, training=False)
 
 #calculate results
 TP = [0 for j in range(CLASSES)]
@@ -262,9 +267,12 @@ accuracy = [ float(TP[j]+TN[j])/float(TP[j]+TN[j]+FP[j]+FN[j])  for j in range(C
 precision = [ float(TP[j])/float(TP[j]+FP[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
 recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FN[j] > 0 else 0.0 for j in range(CLASSES)]
 global_accuracy = float(sum(TP)+sum(TN))/float(sum(TP)+sum(TN)+sum(FP)+sum(FN))
+global_sensitivity = float(sum(TP))/float(sum(TP)+sum(FN))
+global_specificity = float(sum(TN))/float(sum(FP)+sum(TN))
+global_balanced_accuracy = float(global_specificity+global_sensitivity)/2
 
-print("TP = "+str(TP[0])+" , TN = "+str(TN[0]))
-print("FP = "+str(FP[0])+" , FN = "+str(FN[0]))
+print("TP = "+str(sum(TP))+" , TN = "+str(sum(TN)))
+print("FP = "+str(sum(FP))+" , FN = "+str(sum(FN)))
 
 print("Class Precision:")
 print(precision)
@@ -279,5 +287,10 @@ print(accuracy)
 print("")
 
 print("Global Accuracy:\n"+str(global_accuracy))
+print("\nGlobal Balanced Accuracy:\n"+str(global_balanced_accuracy))
 
-
+'''
+for i in range(10):
+	print(targets[i,:].astype(int))
+	print(np.greater(outputs[i,:],0.5).astype(int))
+'''
