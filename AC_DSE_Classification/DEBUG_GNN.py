@@ -10,20 +10,15 @@ import tensorflow as tf
 import scipy
 import pickle
 
-from CompositeGNN.composite_graph_class import CompositeGraphObject
-
-import spektral
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Dropout, Multiply
-from spektral.layers import GCNConv
-from spektral.layers import GraphSageConv
-from spektral.data import Graph
-from spektral.data import Dataset
-from spektral.data.loaders import SingleLoader
-from spektral.data.loaders import BatchLoader
+from CompositeGNN import *
+from CompositeGNN.CompositeGNN import *
+from CompositeGNN import GNN_utils
+from CompositeGNN.MLP import *
 
 #network parameters
-EPOCHS = 500                #number of training epochs
+EPOCHS = 2000               #number of training epochs
+STATE_DIM = 10				#node state dimension
+STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
 LR = 0.001					#learning rate
 MAX_ITER = 4				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
@@ -47,62 +42,26 @@ atomic_label = { 3:'Li', 5:'B', 6:'C', 7:'N', 8:'O', 9:'F', 12:'Mg', 13:'Al', 15
 label_translator = {'C':1, 'N':2, 'O':3, 'S':4, 'F':5, 'P':6, 'Cl':7, 'I':7, 'Br':7, 'Ca':8, 'Mg':8, 'K':8, 'Li':8, 'Co':8, 'As':8, 'B':8, 'Al':8, 'Au':8, 'Fe':8}
 chromosome_dict = {'MT':0, '1':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, '11':11, '12':12, '13':13, '14':14, '15':15, '16':16, '17':17, '18':18, '19':19, '20':20, '21':21, '22':22, 'X':23, 'Y':24}
 
-#definition of GNN Model Class
-class DrugClassifier(Model):
-
-	#constructor
-	def __init__(self, list_hidden, units_dense, classes):
-		#Keras.Model class constructor
-		super().__init__()
-		#define list of convolutional layers
-		self.graph_conv = list()
-		for h in list_hidden:
-			self.graph_conv.append(GraphSageConv(h, aggregate="mean", activation="relu"))
-		self.dense = Dense(units_dense,"relu")
-		self.output_layer = Dense(classes,'softmax')
-
-	#call predictor on input data
-	def call(self, inputs):
-		node_state = inputs[0] #input node features
-		adjacency = inputs[1] #input adjacency tensor
-		set_mask = inputs[2] #training/validation/test mask
-		#cast adjacency matrix to sparse
-		adjacency = tf.sparse.from_dense(adjacency)
-		#call every convolutional layer
-		for gc in self.graph_conv:
-			node_state = gc((node_state, adjacency))
-		#apply set mask
-		node_state_set = tf.boolean_mask(node_state,tf.reshape(set_mask,set_mask.shape[0]))
-		#apply dense layer
-		out = self.dense(node_state_set)
-		out = self.output_layer(out)
-		return out
-
-#custom dataset class
-class CustomDataset(Dataset):
-
-	def __init__(self, graph_objects, **kwargs):
-		self.num_batches = len(graph_objects)
-		self.adjacency = [go.getAdjacency().todense() for go in graph_objects]
-		self.nodes = [go.getNodes() for go in graph_objects]
-		self.arcs = [go.getArcs() for go in graph_objects]
-		self.targets = [go.getTargets() for go in graph_objects]
-		self.set_mask = [go.getSetMask() for go in graph_objects]
-		super().__init__(**kwargs)
-
-	def read(self):
-		graphs = list()
-		for i in range(self.num_batches):
-			g = Graph(a=self.adjacency[i], e=self.arcs[i], x=self.nodes[i], y=self.targets[i])
-			g.set_mask = self.set_mask[i]
-			graphs.append(g)
-		return graphs
-
-#custom loader class
-class CustomLoader(BatchLoader):
-		
-	def collate(self, batch):
-		return (batch[0].x, batch[0].a, batch[0].set_mask), batch[0].y
+#function that translates a nx_graph into a graph_object
+def NXtoGO(nx_graph, target):
+	nodes = np.zeros((len(nx_graph.nodes), 8))
+	arcs = list()
+	targets = np.reshape(target, (1,10))
+	for i in range(len(nx_graph.nodes)):
+		nodes[i][label_translator[nx_graph.nodes[i]['info']]-1] = 1
+	for n1,n2 in nx_graph.edges:
+		label = [n1, n2, 0, 0, 0, 0]
+		label[nx_graph.edges[n1,n2]['info']+1] = 1
+		arcs.append(label)
+		label = [n2, n1, 0, 0, 0, 0]
+		label[nx_graph.edges[n1,n2]['info']+1] = 1
+		arcs.append(label)
+	#skip graphs without edges
+	if not arcs:
+		return None
+	arcs = np.array(arcs)
+	node_graph = np.ones((nodes.shape[0],1))
+	return GraphObject(arcs,nodes,targets,'g',NodeGraph=node_graph)
 
 #custom loss function for multilabel classification
 '''
@@ -232,6 +191,17 @@ for i in range(links_gg.shape[0]):
 	l = l+2
 arcs = np.array(arcs)
 	
+#reduce tasks to a number taken in input by the script
+counts = np.sum(targets, axis=0)
+balance_scores = np.divide(counts, targets.shape[0])
+imbalance_scores = np.add(balance_scores, -0.5)
+for i in range(len(balance_scores)):
+	if imbalance_scores[i] < 0.0: imbalance_scores[i] = -imbalance_scores[i]
+ranking = np.argsort(imbalance_scores)
+CLASSES = int(sys.argv[2])
+selected = ranking[:CLASSES]
+targets = targets[:,selected]
+
 #split the dataset
 validation_size = int(validation_share*targets.shape[0])
 test_size = int(test_share*targets.shape[0])
@@ -250,15 +220,10 @@ for i in validation_index:
 	va_mask[i] = 1
 for i in training_index:
 	tr_mask[i] = 1
-#split targets
-te_targets = targets[ te_mask.astype(bool), : ]
-va_targets = targets[ va_mask.astype(bool), : ]
-tr_targets = targets[ tr_mask.astype(bool), : ]
 #concatenate all-zero set mask extensions for gene nodes
 te_mask = np.concatenate((te_mask,np.zeros(len(genes), dtype=int)))
 va_mask = np.concatenate((va_mask,np.zeros(len(genes), dtype=int)))
 tr_mask = np.concatenate((tr_mask,np.zeros(len(genes), dtype=int)))
-
 
 ### DEBUG START ###
 '''
@@ -274,30 +239,27 @@ sys.exit()
 ### DEBUG STOP ###
 
 #build CompositeGraphObject
-tr_graph = CompositeGraphObject(arcs, nodes, tr_targets, type_mask, [7,27], 'n', tr_mask, output_mask, aggregation_mode='average')
-va_graph = CompositeGraphObject(arcs, nodes, va_targets, type_mask, [7,27], 'n', va_mask, output_mask, aggregation_mode='average')
-te_graph = CompositeGraphObject(arcs, nodes, te_targets, type_mask, [7,27], 'n', te_mask, output_mask, aggregation_mode='average')
-
-#create spektral dataset objects
-print("Packing data")
-tr_dataset = CustomDataset([tr_graph])
-va_dataset = CustomDataset([va_graph])
-te_dataset = CustomDataset([te_graph])
-#create loader objects
-tr_loader = CustomLoader(tr_dataset, batch_size=1, epochs=None, shuffle=False)
-va_loader = CustomLoader(va_dataset, batch_size=1, epochs=None, shuffle=False)
-te_loader = CustomLoader(te_dataset, batch_size=1, epochs=None, shuffle=False)
+tr_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', tr_mask, output_mask, aggregation_mode='average')
+va_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', va_mask, output_mask, aggregation_mode='average')
+te_graph = CompositeGraphObject(arcs, nodes, targets, type_mask, [7,27], 'n', te_mask, output_mask, aggregation_mode='average')
 
 #build network
-print("Building the network")
-model = DrugClassifier([50, 50], 100, classes = CLASSES)
-model.compile(optimizer=tf.keras.optimizers.Adam(), loss=tf.keras.losses.binary_crossentropy, metrics=[tf.keras.metrics.Accuracy()], loss_weights=None, weighted_metrics=None, run_eagerly=True)
+netSt_drugs = MLP(input_dim=2*STATE_DIM+LABEL_DIM[0]+sum(LABEL_DIM), layers=[STATE_DIM], activations=['relu'],
+                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
+                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)])
+netSt_genes = MLP(input_dim=2*STATE_DIM+LABEL_DIM[1]+sum(LABEL_DIM), layers=[STATE_DIM], activations=['relu'],
+                     kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
+                     bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)])
+netOut = MLP(input_dim=STATE_DIM, layers=[15,CLASSES], activations=['relu', 'sigmoid'],
+                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
+                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
+model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.binary_crossentropy, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
 
 #train the network
-model.fit(tr_loader.load(), steps_per_epoch=tr_loader.steps_per_epoch, epochs=EPOCHS, validation_data=va_loader.load(), validation_steps=1)
+model.train(tr_graph, EPOCHS, va_graph)
 
 #evaluate the network
-outputs = model.predict(te_loader.load(), steps=1)
+iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, training=False)
 
 #calculate results
 TP = [0 for j in range(CLASSES)]

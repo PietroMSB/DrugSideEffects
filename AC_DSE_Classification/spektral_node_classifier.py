@@ -306,9 +306,9 @@ TP = [0 for j in range(CLASSES)]
 TN = [0 for j in range(CLASSES)]
 FP = [0 for j in range(CLASSES)]
 FN = [0 for j in range(CLASSES)]
-for i in range(te_targets.shape[0]):
+for i in range(targets.shape[0]):
 	for j in range(CLASSES):
-		if te_targets[i][j] > 0.5:
+		if targets[i][j] > 0.5:
 			if outputs[i][j] > 0.5: TP[j] += 1
 			else: FN[j] += 1
 		else:
@@ -317,9 +317,13 @@ for i in range(te_targets.shape[0]):
 accuracy = [ float(TP[j]+TN[j])/float(TP[j]+TN[j]+FP[j]+FN[j])  for j in range(CLASSES)]
 precision = [ float(TP[j])/float(TP[j]+FP[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
 recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FN[j] > 0 else 0.0 for j in range(CLASSES)]
+
+#calculate global metrics
 global_accuracy = float(sum(TP)+sum(TN))/float(sum(TP)+sum(TN)+sum(FP)+sum(FN))
-global_sensitivity = float(sum(TP))/float(sum(TP)+sum(FN))
-global_specificity = float(sum(TN))/float(sum(FP)+sum(TN))
+global_sensitivity = 0.0
+if float(sum(TP)+sum(FN)) > 0: global_sensitivity = float(sum(TP))/float(sum(TP)+sum(FN))
+global_specificity = 0.0
+if float(sum(FP)+sum(TN)) > 0: global_specificity = float(sum(TN))/float(sum(FP)+sum(TN))
 global_balanced_accuracy = float(global_specificity+global_sensitivity)/2
 
 print("TP = "+str(sum(TP))+" , TN = "+str(sum(TN)))

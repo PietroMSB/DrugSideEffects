@@ -16,11 +16,12 @@ import spektral
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, Multiply
 from spektral.layers import GCNConv
-from spektral.layers import GraphSageConv
+from spektral.transforms import GCNFilter
 from spektral.data import Graph
 from spektral.data import Dataset
 from spektral.data.loaders import SingleLoader
 from spektral.data.loaders import BatchLoader
+from spektral.utils import gcn_filter 
 
 #network parameters
 EPOCHS = 500                #number of training epochs
@@ -57,17 +58,15 @@ class DrugClassifier(Model):
 		#define list of convolutional layers
 		self.graph_conv = list()
 		for h in list_hidden:
-			self.graph_conv.append(GraphSageConv(h, aggregate="mean", activation="relu"))
+			self.graph_conv.append(GCNConv(h, activation="relu"))
 		self.dense = Dense(units_dense,"relu")
 		self.output_layer = Dense(classes,'softmax')
 
 	#call predictor on input data
 	def call(self, inputs):
-		node_state = inputs[0] #input node features
-		adjacency = inputs[1] #input adjacency tensor
+		node_state = inputs[0][0] #input node features
+		adjacency = inputs[1][0] #input adjacency tensor (previously transformed with GCNFilter())
 		set_mask = inputs[2] #training/validation/test mask
-		#cast adjacency matrix to sparse
-		adjacency = tf.sparse.from_dense(adjacency)
 		#call every convolutional layer
 		for gc in self.graph_conv:
 			node_state = gc((node_state, adjacency))
@@ -102,7 +101,7 @@ class CustomDataset(Dataset):
 class CustomLoader(BatchLoader):
 		
 	def collate(self, batch):
-		return (batch[0].x, batch[0].a, batch[0].set_mask), batch[0].y
+		return ([batch[0].x], [batch[0].a], batch[0].set_mask), batch[0].y
 
 #custom loss function for multilabel classification
 '''
@@ -232,6 +231,17 @@ for i in range(links_gg.shape[0]):
 	l = l+2
 arcs = np.array(arcs)
 	
+#reduce tasks to a number taken in input by the script
+counts = np.sum(targets, axis=0)
+balance_scores = np.divide(counts, targets.shape[0])
+imbalance_scores = np.add(balance_scores, -0.5)
+for i in range(len(balance_scores)):
+	if imbalance_scores[i] < 0.0: imbalance_scores[i] = -imbalance_scores[i]
+ranking = np.argsort(imbalance_scores)
+CLASSES = int(sys.argv[2])
+selected = ranking[:CLASSES]
+targets = targets[:,selected]
+
 #split the dataset
 validation_size = int(validation_share*targets.shape[0])
 test_size = int(test_share*targets.shape[0])
@@ -283,6 +293,9 @@ print("Packing data")
 tr_dataset = CustomDataset([tr_graph])
 va_dataset = CustomDataset([va_graph])
 te_dataset = CustomDataset([te_graph])
+tr_dataset.apply(GCNFilter())
+va_dataset.apply(GCNFilter())
+te_dataset.apply(GCNFilter())
 #create loader objects
 tr_loader = CustomLoader(tr_dataset, batch_size=1, epochs=None, shuffle=False)
 va_loader = CustomLoader(va_dataset, batch_size=1, epochs=None, shuffle=False)
@@ -298,6 +311,7 @@ model.fit(tr_loader.load(), steps_per_epoch=tr_loader.steps_per_epoch, epochs=EP
 
 #evaluate the network
 outputs = model.predict(te_loader.load(), steps=1)
+targets = te_targets
 
 #calculate results
 TP = [0 for j in range(CLASSES)]

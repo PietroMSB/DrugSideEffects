@@ -231,6 +231,17 @@ for i in range(links_gg.shape[0]):
 	arcs[l+1][:] = [node_number[str(links_gg[i][1])],node_number[str(links_gg[i][0])]]
 	l = l+2
 arcs = np.array(arcs)
+
+#reduce tasks to a number taken in input by the script
+counts = np.sum(targets, axis=0)
+balance_scores = np.divide(counts, targets.shape[0])
+imbalance_scores = np.add(balance_scores, -0.5)
+for i in range(len(balance_scores)):
+	if imbalance_scores[i] < 0.0: imbalance_scores[i] = -imbalance_scores[i]
+ranking = np.argsort(imbalance_scores)
+CLASSES = int(sys.argv[2])
+selected = ranking[:CLASSES]
+targets = targets[:,selected]
 	
 #split the dataset
 validation_size = int(validation_share*targets.shape[0])
@@ -298,6 +309,7 @@ model.fit(tr_loader.load(), steps_per_epoch=tr_loader.steps_per_epoch, epochs=EP
 
 #evaluate the network
 outputs = model.predict(te_loader.load(), steps=1)
+targets = te_targets
 
 #calculate results
 TP = [0 for j in range(CLASSES)]
