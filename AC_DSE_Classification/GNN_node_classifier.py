@@ -17,11 +17,10 @@ from CompositeGNN.MLP import *
 
 #network parameters
 EPOCHS = 2000               #number of training epochs
-STATE_DIM = 10				#node state dimension
-STATE_INIT_STDEV = 0.1		#standard deviation of random state initialization
+STATE_DIM = 360				#node state dimension
 LR = 0.001					#learning rate
 MAX_ITER = 4				#maximum number of state convergence iterations
-VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
+VALIDATION_INTERVAL = 10000	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
 LABEL_DIM = [7, 27]
 
@@ -239,13 +238,13 @@ netSt_drugs = MLP(input_dim=2*STATE_DIM+LABEL_DIM[0]+sum(LABEL_DIM), layers=[STA
 netSt_genes = MLP(input_dim=2*STATE_DIM+LABEL_DIM[1]+sum(LABEL_DIM), layers=[STATE_DIM], activations=['relu'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)])
-netOut = MLP(input_dim=STATE_DIM, layers=[15,CLASSES], activations=['relu', 'sigmoid'],
+netOut = MLP(input_dim=STATE_DIM, layers=[720,CLASSES], activations=['relu', 'sigmoid'],
                       kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                       bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)])
 model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.binary_crossentropy, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.01, addressed_problem='c')
 
 #train the network
-model.train(tr_graph, EPOCHS, va_graph)
+model.train(tr_graph, EPOCHS, va_graph, update_freq=100, max_fails=1000)
 
 #evaluate the network
 iterations, loss, targets, outputs = model.evaluate_single_graph(te_graph, training=False)
