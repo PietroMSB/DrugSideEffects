@@ -290,7 +290,7 @@ te_loader = CustomLoader(te_dataset, batch_size=1, epochs=None, shuffle=False)
 
 #build network
 print("Building the network")
-model = DrugClassifier([50, 50], 100, classes = CLASSES)
+model = DrugClassifier([18, 18], 106, classes = CLASSES)
 model.compile(optimizer=tf.keras.optimizers.Adam(), loss=tf.keras.losses.binary_crossentropy, metrics=[tf.keras.metrics.Accuracy()], loss_weights=None, weighted_metrics=None, run_eagerly=True)
 
 #train the network
@@ -300,23 +300,35 @@ model.fit(tr_loader.load(), steps_per_epoch=tr_loader.steps_per_epoch, epochs=EP
 outputs = model.predict(te_loader.load(), steps=1)
 
 #calculate results
+targets = te_targets
 TP = [0 for j in range(CLASSES)]
 TN = [0 for j in range(CLASSES)]
 FP = [0 for j in range(CLASSES)]
 FN = [0 for j in range(CLASSES)]
+exact_matches = 0
 for i in range(targets.shape[0]):
+	exact_match = True
 	for j in range(CLASSES):
 		if targets[i][j] > 0.5:
-			if outputs[i][j] > 0.5: TP[j] += 1
-			else: FN[j] += 1
+			if outputs[i][j] > 0.5: 
+				TP[j] += 1
+			else: 
+				FN[j] += 1
+				exact_match = False
 		else:
-			if outputs[i][j] > 0.5: FP[j] += 1
-			else: TN[j] += 1
+			if outputs[i][j] > 0.5: 
+				FP[j] += 1
+				exact_match = False
+			else:
+				TN[j] += 1
+	if exact_match:
+		exact_matches += 1
 accuracy = [ float(TP[j]+TN[j])/float(TP[j]+TN[j]+FP[j]+FN[j])  for j in range(CLASSES)]
 precision = [ float(TP[j])/float(TP[j]+FP[j]) if TP[j]+FP[j] > 0 else 0.0 for j in range(CLASSES)]
 recall = [ float(TP[j])/float(TP[j]+FN[j]) if TP[j]+FN[j] > 0 else 0.0 for j in range(CLASSES)]
 
 #calculate global metrics
+EMR = float(exact_matches) / targets.shape[0]
 global_accuracy = float(sum(TP)+sum(TN))/float(sum(TP)+sum(TN)+sum(FP)+sum(FN))
 global_sensitivity = 0.0
 if float(sum(TP)+sum(FN)) > 0: global_sensitivity = float(sum(TP))/float(sum(TP)+sum(FN))
@@ -341,9 +353,4 @@ print("")
 
 print("Global Accuracy:\n"+str(global_accuracy))
 print("\nGlobal Balanced Accuracy:\n"+str(global_balanced_accuracy))
-
-'''
-for i in range(10):
-	print(targets[i,:].astype(int))
-	print(np.greater(outputs[i,:],0.5).astype(int))
-'''
+print("\nExact Match Ratio:\n"+str(EMR))
