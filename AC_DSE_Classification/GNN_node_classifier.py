@@ -318,12 +318,14 @@ sys.exit()
 
 ### DEBUG START ###
 ### DEBUG: print final list of genes
+'''
 print("Printing final list of genes")
 out_file = open("gene_ids.txt", 'w')
 for g in genes:
 	out_file.write(g+"\n")
 out_file.close()
 sys.exit()
+'''
 ### DEBUG STOP ###
 
 #split the dataset
@@ -352,6 +354,7 @@ tr_mask = np.concatenate((tr_mask,np.zeros(len(genes), dtype=int)))
 
 ### DEBUG START ###
 '''
+print("Printing dimensions of dataset components")
 print(nodes.shape)
 print(arcs.shape)
 print(expanded_targets.shape)

@@ -9,6 +9,10 @@ import pandas
 import tensorflow as tf
 import scipy
 import pickle
+import rdkit
+from rdkit import Chem
+from rdkit.Chem import FunctionalGroups
+from rdkit import DataStructs
 
 from CompositeGNN.composite_graph_class import CompositeGraphObject
 
@@ -29,7 +33,8 @@ LR = 0.001					#learning rate
 MAX_ITER = 4				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
-LABEL_DIM = [7, 27]
+ACTIVATION = "relu"
+LABEL_DIM = [135, 27]
 
 #gpu parameters
 use_gpu = True
@@ -38,8 +43,10 @@ target_gpu = "1"
 #script parameters
 run_id = sys.argv[1]
 path_data = "Datasets/Nuovo/Output/Soglia_100/"
-#path_data = "Datasets/Artificiale/Output/"
 path_results = "Results/Nuovo/LinkPredictor/"+run_id+".txt"
+tanimoto_threshold = 0.5
+feature_fingerprint_size = 128
+tanimoto_fingerprint_size = 2048
 splitting_seed = 920305
 validation_share = 0.1
 test_share = 0.1
@@ -103,6 +110,22 @@ class CustomLoader(BatchLoader):
 	def collate(self, batch):
 		return ([batch[0].x], [batch[0].a], batch[0].set_mask), batch[0].y
 
+#function that adjusts NaN features
+def CheckedFeature(feature):
+	if feature is None:
+		return 0.0
+	if np.isnan(feature):
+		return 0.0
+	return feature
+
+#function that binarizes a fingerprint
+def BinarizedFingerprint(fp):
+	bfp = [0 for i in range(len(fp))]
+	for i in range(len(fp)):
+		if fp[i] > 0:
+			bfp[i] = 1
+	return bfp
+
 #custom loss function for multilabel classification
 '''
 def multilabel_crossentropy_loss(y, x):
@@ -117,46 +140,56 @@ if use_gpu:
 	os.environ["CUDA_VISIBLE_DEVICES"]=target_gpu
 
 #load side-effect data
+print("Loading side-effects")
 in_file = open(path_data+"side_effects.pkl", 'rb')
 side_effects = pickle.load(in_file)
 in_file.close()
 #load gene data
+print("Loading genes")
 in_file = open(path_data+"genes.pkl", 'rb')
 genes = pickle.load(in_file)
 in_file.close()
 #load drug data
+print("Loading drugs")
 in_file = open(path_data+"drugs.pkl", 'rb')
 drugs_pre = pickle.load(in_file)
 in_file.close()
 #load drug-side effect links
+print("Loading drug - side-effects associations")
 in_file = open(path_data+"drug_side_effect_links.pkl", 'rb')
 links_dse = pickle.load(in_file)
 in_file.close()
 #load gene-gene links
+print("Loading protein-protein interactions")
 in_file = open(path_data+"gene_gene_links.pkl", 'rb')
 links_gg = pickle.load(in_file)
 in_file.close()
 #load drug-gene links
+print("Loading drug-gene links")
 in_file = open(path_data+"drug_gene_links.pkl", 'rb')
 links_dg = pickle.load(in_file)
 in_file.close()
 #load drug features
+print("Loading drug features")
 pubchem_data = pandas.read_csv(path_data+"pubchem_output.csv")
 #load gene features
+print("Loading gene features")
 in_file = open(path_data+"gene_features.pkl", 'rb')
 gene_data = pickle.load(in_file)
 in_file.close()
 
 #preprocess drug ids
+print("Preprocessing drug identifiers")
 drugs = list()
 for i in range(len(drugs_pre)):
 	drugs.append(str(int(drugs_pre[i][4:])))
 
 #determine graph dimensions
+print("Calculating graph dimensions")
 CLASSES = len(side_effects)		#number of outputs
 n_nodes = len(drugs)+len(genes)
 n_edges = 2*links_dg.shape[0]+2*links_gg.shape[0]
-dim_node_label = 27
+dim_node_label = max(LABEL_DIM)
 type_mask = np.zeros((n_nodes,2), dtype=int)
 #build id -> node number mappings
 node_number = dict()
@@ -172,9 +205,11 @@ for i in range(len(side_effects)):
 	class_number[side_effects[i]] = i
 
 #build output mask
+print("Building output mask")
 output_mask = np.concatenate((np.ones(len(drugs)), np.zeros(len(genes))))
 
 #build list of positive examples
+print("Building list of positive examples")
 positive_dsa_list = list()
 for i in range(links_dse.shape[0]):
 	if str(int(links_dse[i][0][4:])) in node_number.keys():
@@ -186,22 +221,89 @@ for i in range(links_dse.shape[0]):
 		sys.exit("ERROR: drug-side-effect link pointing to incorrect drug id")
 
 #build node feature matrix
+print("Building node feature matrix")
 nodes = np.zeros((n_nodes, dim_node_label))
 #build drug features
 for i in pubchem_data.index:
 	#skip drugs which were filtered out of the dataset
-	if pubchem_data.at[i,'cid'] not in node_number.keys():
+	if str(pubchem_data.at[i,'cid']) not in node_number.keys():
 		continue
 	nn = node_number[str(pubchem_data.at[i,'cid'])]
-	nodes[nn][0] = float(pubchem_data.at[i,'mw'])#molecular weight
-	nodes[nn][1] = float(pubchem_data.at[i,'polararea'])#polar area
-	nodes[nn][2] = float(pubchem_data.at[i,'xlogp'])#log octanal/water partition coefficient
-	nodes[nn][3] = float(pubchem_data.at[i,'heavycnt'])#heavy atom count
-	nodes[nn][4] = float(pubchem_data.at[i,'hbonddonor'])#hydrogen bond donors
-	nodes[nn][5] = float(pubchem_data.at[i,'hbondacc'])#hydrogen bond acceptors
-	nodes[nn][6] = float(pubchem_data.at[i,'rotbonds'])#number of rotatable bonds
+	nodes[nn][0] = CheckedFeature(float(pubchem_data.at[i,'mw']))#molecular weight
+	nodes[nn][1] = CheckedFeature(float(pubchem_data.at[i,'polararea']))#polar area
+	nodes[nn][2] = CheckedFeature(float(pubchem_data.at[i,'xlogp']))#log octanal/water partition coefficient
+	nodes[nn][3] = CheckedFeature(float(pubchem_data.at[i,'heavycnt']))#heavy atom count
+	nodes[nn][4] = CheckedFeature(float(pubchem_data.at[i,'hbonddonor']))#hydrogen bond donors
+	nodes[nn][5] = CheckedFeature(float(pubchem_data.at[i,'hbondacc']))#hydrogen bond acceptors
+	nodes[nn][6] = CheckedFeature(float(pubchem_data.at[i,'rotbonds']))#number of rotatable bonds
+
+#normalize drug features
+print("Normalizing drug features")
+for i in range(dim_node_label):
+	col_min = None
+	col_max = None
+	for j in range(n_nodes):
+		#skip zeros
+		if nodes[j][i] == 0:
+			continue
+		if col_min is None:
+			col_min = nodes[j][i]
+		if col_max is None:
+			col_max = nodes[j][i]
+		if nodes[j][i] < col_min:
+			col_min = nodes[j][i]
+		if nodes[j][i] > col_max:
+			col_max = nodes[j][i]
+	#do not normalize zero columns
+	if col_min is None or col_max is None:
+		continue
+	for j in range(nodes.shape[0]):
+		#do not normalize zeros
+		if nodes[j][i] == 0:
+			continue
+		nodes[j][i] = float(nodes[j][i] - col_min) / float(col_max - col_min)
+
+#build dict of molecular structures
+molecule_dict = dict()
+for i in pubchem_data.index:
+	#skip drugs which were filtered out of the dataset
+	if str(pubchem_data.at[i,'cid']) not in node_number.keys():
+		continue
+	nn = node_number[str(pubchem_data.at[i,'cid'])]
+	molecule_dict[nn] = rdkit.Chem.MolFromSmiles(pubchem_data.at[i,'isosmiles'])
+#build dicts of fingerprints
+feature_fingerprint_dict = dict()
+tanimoto_fingerprint_dict = dict()
+for k in molecule_dict.keys():
+	feature_fingerprint_dict[k] = Chem.RDKFingerprint(molecule_dict[k], fpSize=feature_fingerprint_size)
+	tanimoto_fingerprint_dict[k] = Chem.RDKFingerprint(molecule_dict[k], fpSize=tanimoto_fingerprint_size)
+
+#add fingerprints to drug node features
+for i in pubchem_data.index:
+	#skip drugs which were filtered out of the dataset
+	if str(pubchem_data.at[i,'cid']) not in node_number.keys():
+		continue
+	nn = node_number[str(pubchem_data.at[i,'cid'])]
+	#get fingerprint from dictionary and convert it to numpy array
+	fingerprint = np.array((1,))
+	rdkit.DataStructs.cDataStructs.ConvertToNumpyArray(feature_fingerprint_dict[nn], fingerprint)
+	#add fingerprint
+	nodes[nn][-feature_fingerprint_size:] = fingerprint
+
+#build list of drug-drug connections on the basis of chemical fingerprint similarity
+ddc_list = list()
+for i in range(len(drugs)):
+	for j in range(len(drugs)):
+		if i == j:
+			continue
+		tanimoto_coeff = DataStructs.TanimotoSimilarity(tanimoto_fingerprint_dict[node_number[drugs[i]]],tanimoto_fingerprint_dict[node_number[drugs[j]]])
+		if tanimoto_coeff >= tanimoto_threshold:
+			ddc_list.append([node_number[drugs[i]], node_number[drugs[j]]])
+print("Adding "+str(len(ddc_list))+" drug-drug edges based on Tanimoto similarity ( coeff >= "+str(tanimoto_threshold)+" )")
+n_edges = n_edges + len(ddc_list)
 
 #build gene features
+print("Adding gene features")
 for i in range(gene_data.shape[0]):
 	#skip genes which were filtered out of the dataset
 	if gene_data[i,0] not in node_number.keys():
@@ -212,11 +314,13 @@ for i in range(gene_data.shape[0]):
 	nodes[nn][2+chromosome_dict[gene_data[i,4]]] = float(1)#one-hot encoding of chromosome
 	
 #build target tensor
+print("Building target tensor")
 targets = np.zeros((len(drugs),len(side_effects)))
 for p in positive_dsa_list:	
 	targets[p[0]][p[1]] = 1
 
 #build arcs tensor
+print("Building arc tensor")
 arcs = np.zeros((n_edges,2), dtype=int)
 l = 0
 #add drug-gene edges
@@ -229,9 +333,42 @@ for i in range(links_gg.shape[0]):
 	arcs[l][:] = [node_number[str(links_gg[i][0])],node_number[str(links_gg[i][1])]]
 	arcs[l+1][:] = [node_number[str(links_gg[i][1])],node_number[str(links_gg[i][0])]]
 	l = l+2
+#add drug-drug edges
+for ddc in ddc_list:
+	arcs[l][:] = ddc
+	l = l+1
 arcs = np.array(arcs)
+
+### DEBUG START ###
+### DEBUG: calculate graph diameter
+'''
+print("Calculating graph diameter")
+import networkx as nx
+g = nx.Graph()
+for i in range(len(nodes)):
+	g.add_node(i)
+for i in range(len(arcs)):
+	g.add_edge(arcs[i][0], arcs[i][1])
+diameter = nx.algorithms.distance_measures.diameter(g)
+print("Graph Diameter = "+str(diameter))
+sys.exit()
+'''
+### DEBUG STOP ###
+
+### DEBUG START ###
+### DEBUG: print final list of genes
+'''
+print("Printing final list of genes")
+out_file = open("gene_ids.txt", 'w')
+for g in genes:
+	out_file.write(g+"\n")
+out_file.close()
+sys.exit()
+'''
+### DEBUG STOP ###
 	
 #split the dataset
+print("Splitting the dataset")
 validation_size = int(validation_share*targets.shape[0])
 test_size = int(test_share*targets.shape[0])
 index = np.array(list(range(targets.shape[0])))
@@ -258,9 +395,9 @@ te_mask = np.concatenate((te_mask,np.zeros(len(genes), dtype=int)))
 va_mask = np.concatenate((va_mask,np.zeros(len(genes), dtype=int)))
 tr_mask = np.concatenate((tr_mask,np.zeros(len(genes), dtype=int)))
 
-
 ### DEBUG START ###
 '''
+print("Printing dimensions of dataset components")
 print(nodes.shape)
 print(arcs.shape)
 print(expanded_targets.shape)
@@ -273,9 +410,10 @@ sys.exit()
 ### DEBUG STOP ###
 
 #build CompositeGraphObject
-tr_graph = CompositeGraphObject(arcs, nodes, tr_targets, type_mask, [7,27], 'n', tr_mask, output_mask, aggregation_mode='average')
-va_graph = CompositeGraphObject(arcs, nodes, va_targets, type_mask, [7,27], 'n', va_mask, output_mask, aggregation_mode='average')
-te_graph = CompositeGraphObject(arcs, nodes, te_targets, type_mask, [7,27], 'n', te_mask, output_mask, aggregation_mode='average')
+print("Building CompositeGraphObjects")
+tr_graph = CompositeGraphObject(arcs, nodes, tr_targets, type_mask, LABEL_DIM, 'n', tr_mask, output_mask, aggregation_mode="average")
+va_graph = CompositeGraphObject(arcs, nodes, va_targets, type_mask, LABEL_DIM, 'n', va_mask, output_mask, aggregation_mode="average")
+te_graph = CompositeGraphObject(arcs, nodes, te_targets, type_mask, LABEL_DIM, 'n', te_mask, output_mask, aggregation_mode="average")
 
 #create spektral dataset objects
 print("Packing data")
@@ -292,7 +430,7 @@ te_loader = CustomLoader(te_dataset, batch_size=1, epochs=None, shuffle=False)
 
 #build network
 print("Building the network")
-model = DrugClassifier([50, 50], 100, classes = CLASSES)
+model = DrugClassifier([36, 36], 116, classes = CLASSES)
 model.compile(optimizer=tf.keras.optimizers.Adam(), loss=tf.keras.losses.binary_crossentropy, metrics=[tf.keras.metrics.Accuracy()], loss_weights=None, weighted_metrics=None, run_eagerly=True)
 
 #train the network
