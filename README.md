@@ -57,3 +57,15 @@ Michael Kuhn et al. The SIDER database of drugs and side effects. Nucleic Acids 
 https://pubchem.ncbi.nlm.nih.gov/
 
 Sunghwan Kim et al. PubChem in 2021: new data content and improved web interfaces. Nucleic Acids Research 49(D1):D1388–D1395, 2021. doi:10.1093/nar/gkaa971
+
+* Drug-drug links were based on the Tanimoto similarity of chemical fingerprints of drugs, obtained with RdKit. Fingerprints were also used as additional drug features:
+https://www.rdkit.org/
+
+* Molecular function features, based on the Gene Ontology, were extracted with DAVID:
+http://geneontology.org/
+https://david.ncifcrf.gov/tools.jsp
+
+Michael Ashburner et al. Gene ontology: tool for the unification of biology. Nature Genetics 25(1):25-9, 2000.
+
+Glynn Dennis Jr. et al. DAVID: Database for Annotation, Visualization, and Integrated Discovery. Genome Biology 4:R60, 2003.
+
