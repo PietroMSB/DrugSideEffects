@@ -21,15 +21,15 @@ from CompositeGNN.MLP import *
 
 #network parameters
 EPOCHS = 2000               #number of training epochs
-STATE_DIM = 18				#node state dimension
+STATE_DIM = 50				#node state dimension
 HIDDEN_UNITS_OUT_NET = 100	#number of hidden units in the output network
 LR = 0.001					#learning rate
 MAX_ITER = 6				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
 AGGREGATION = "average"     #can either be "average" or "sum"
-ACTIVATION = "relu"
-LABEL_DIM = [135, 27]
+ACTIVATION = "tanh"
+LABEL_DIM = [135, 140]
 
 #gpu parameters
 use_gpu = True
@@ -39,9 +39,10 @@ target_gpu = "1"
 run_id = sys.argv[1]
 path_data = "Datasets/Nuovo/Output/Soglia_100/"
 path_results = "Results/Nuovo/LinkPredictor/"+run_id+".txt"
-tanimoto_threshold = 0.5
+tanimoto_threshold = 0.7
 feature_fingerprint_size = 128
 tanimoto_fingerprint_size = 2048
+ontology_size = 113
 splitting_seed = 920305
 validation_share = 0.1
 test_share = 0.1
@@ -138,6 +139,9 @@ print("Loading gene features")
 in_file = open(path_data+"gene_features.pkl", 'rb')
 gene_data = pickle.load(in_file)
 in_file.close()
+#load gene ontology molecular function classification
+print("Loading molecular function ontology data")
+ontology = pandas.read_table(path_data+"david_output.tsv")
 
 #preprocess drug ids
 print("Preprocessing drug identifiers")
@@ -273,6 +277,18 @@ for i in range(gene_data.shape[0]):
 	nodes[nn][0] = float(gene_data[i,1])#dna strand (-1 or +1)
 	nodes[nn][1] = float(gene_data[i,2])#percent GC content (real value in [0,1])
 	nodes[nn][2+chromosome_dict[gene_data[i,4]]] = float(1)#one-hot encoding of chromosome
+
+#add ontology features
+start = 27
+for i in ontology.index:
+	#collect list of genes associated to i-th term
+	gene_list = ontology.at[i,"Genes"].split(", ")
+	#add a "1" to each gene in the list in the (i+start)-th column
+	for g in gene_list:
+		#skip void strings (a by-product of splitting)
+		if g == "": continue
+		nn = node_number[g]
+		nodes[nn][start+i] = 1
 	
 #build target tensor
 print("Building target tensor")
