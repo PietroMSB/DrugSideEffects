@@ -14,15 +14,15 @@ from rdkit import Chem
 from rdkit.Chem import FunctionalGroups
 from rdkit import DataStructs
 
-from CompositeGNN import *
-from CompositeGNN.CompositeGNN import *
-from CompositeGNN import GNN_utils
-from CompositeGNN.MLP import *
+from MOD_CompositeGNN import *
+from MOD_CompositeGNN.CompositeGNN import *
+from MOD_CompositeGNN import GNN_utils
+from MOD_CompositeGNN.MLP import *
 
 #network parameters
 EPOCHS = 2000               #number of training epochs
 STATE_DIM = 50				#node state dimension
-HIDDEN_UNITS_OUT_NET = 100	#number of hidden units in the output network
+HIDDEN_UNITS_OUT_NET = 200	#number of hidden units in the output network
 LR = 0.001					#learning rate
 MAX_ITER = 6				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
@@ -394,18 +394,20 @@ netSt_drugs = MLP(input_dim=2*STATE_DIM+LABEL_DIM[0]+sum(LABEL_DIM), layers=[STA
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
                      kernel_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(1)],
-                     bias_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(1)])
+                     bias_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(1)],
+                     dropout_rate=0.5, dropout_pos=0)
 netSt_genes = MLP(input_dim=2*STATE_DIM+LABEL_DIM[1]+sum(LABEL_DIM), layers=[STATE_DIM], activations=[ACTIVATION],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(1)],
                      kernel_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(1)],
-                     bias_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(1)])
-netOut = MLP(input_dim=STATE_DIM, layers=[HIDDEN_UNITS_OUT_NET,CLASSES], activations=[ACTIVATION, 'sigmoid'],
+                     bias_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(1)],
+                     dropout_rate=0.5, dropout_pos=0)
+netOut = MLP(input_dim=STATE_DIM+max(LABEL_DIM), layers=[HIDDEN_UNITS_OUT_NET,CLASSES], activations=[ACTIVATION, 'sigmoid'],
                      kernel_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      bias_initializer=[tf.keras.initializers.GlorotNormal() for i in range(2)],
                      kernel_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(2)],
                      bias_regularizer=[tf.keras.regularizers.L2(0.01) for i in range(2)],
-                     dropout_rate=0.2, dropout_pos=0)
+                     dropout_rate=0.5, dropout_pos=0)
 model = CompositeGNNnodeBased([netSt_drugs, netSt_genes], netOut, optimizer = tf.keras.optimizers.Adam(LR), loss_function = tf.keras.losses.binary_crossentropy, loss_arguments=None, state_vect_dim = STATE_DIM, max_iteration=MAX_ITER, threshold=0.001, addressed_problem='c')
 
 #train the network
