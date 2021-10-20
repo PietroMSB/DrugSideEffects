@@ -34,7 +34,7 @@ MAX_ITER = 4				#maximum number of state convergence iterations
 VALIDATION_INTERVAL = 10	#interval between two validation checks, in training epochs
 TRAINING_BATCHES = 1        #number of batches in which the training set should be split
 ACTIVATION = "relu"
-LABEL_DIM = [135, 140]
+LABEL_DIM = [135, 140, 360]
 
 #gpu parameters
 use_gpu = True
@@ -425,15 +425,49 @@ sys.exit()
 '''
 ### DEBUG STOP ###
 
-#build CompositeGraphObject
+#build transductive training batches
 print("Building CompositeGraphObjects")
-tr_graph = CompositeGraphObject(arcs, nodes, tr_targets, type_mask, LABEL_DIM, 'n', tr_mask, output_mask, aggregation_mode="average")
-va_graph = CompositeGraphObject(arcs, nodes, va_targets, type_mask, LABEL_DIM, 'n', va_mask, output_mask, aggregation_mode="average")
-te_graph = CompositeGraphObject(arcs, nodes, te_targets, type_mask, LABEL_DIM, 'n', te_mask, output_mask, aggregation_mode="average")
+tr_graphs = list()
+for i in range(TRAINING_BATCHES):
+	batch_nodes = np.copy(nodes)
+	batch_mask = np.copy(tr_mask)
+	#substitute features of nodes outside the batch with transductive features
+	for j in training_index:
+		if j not in tr_batch_index[i]:
+			batch_nodes[j,:] = targets[j,:]
+			#change node type to transductive
+			type_mask[j,0] = 0
+			type_mask[j,2] = 1
+			#change set mask
+			batch_mask[j] = 0
+	#build batch CompositeGraphObject
+	tr_graphs.append( CompositeGraphObject(arcs, batch_nodes, targets, type_mask, LABEL_DIM, 'n', batch_mask, output_mask, aggregation_mode=AGGREGATION) )
+
+#build transductive validation set
+va_nodes = np.copy(nodes)
+#substitute features of training set nodes with transductive features
+for j in training_index:
+	va_nodes[j,:] = targets[j,:]
+	#change node type to transductive
+	type_mask[j,0] = 0
+	type_mask[j,2] = 1
+#build validation CompositeGraphObject
+va_graph = CompositeGraphObject(arcs, va_nodes, targets, type_mask, LABEL_DIM, 'n', va_mask, output_mask, aggregation_mode=AGGREGATION)
+
+#build transductive test set
+te_nodes = np.copy(nodes)
+#substitute features of training set and validation set nodes with transductive features
+for j in np.concatenate((training_index,validation_index)):
+	va_nodes[j,:] = targets[j,:]
+	#change node type to transductive
+	type_mask[j,0] = 0
+	type_mask[j,2] = 1
+#build test CompositeGraphObject
+te_graph = CompositeGraphObject(arcs, te_nodes, targets, type_mask, LABEL_DIM, 'n', te_mask, output_mask, aggregation_mode=AGGREGATION)
 
 #create spektral dataset objects
 print("Packing data")
-tr_dataset = CustomDataset([tr_graph])
+tr_dataset = CustomDataset(tr_graphs)
 va_dataset = CustomDataset([va_graph])
 te_dataset = CustomDataset([te_graph])
 tr_dataset.apply(GCNFilter())
