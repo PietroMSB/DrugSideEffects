@@ -69,3 +69,10 @@ Michael Ashburner et al. Gene ontology: tool for the unification of biology. Nat
 
 Glynn Dennis Jr. et al. DAVID: Database for Annotation, Visualization, and Integrated Discovery. Genome Biology 4:R60, 2003.
 
+
+# Data Dependencies
+
+As some of the data sources are too large to fit in a GitHub repository, you need to download some of them before running DruGNN.
+
+* Download STITCH (http://stitch.embl.de/) and put the files into the Dataset/Nuovo/STITCH folder.
+
