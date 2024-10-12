@@ -2,15 +2,17 @@
 
 This project aims at predicting side effects of drugs based on their chemical and structural features, their interactions with the (metabolic) network of genes, and their (structure) similarity relationships. Drugs and genes are represented as nodes of a heterogeneous graph. Gene-gene interactions, drug-gene interactions, and drug-drug similarity relationships are represented as distinct sets of edges in the graph. The associations between drugs and side-effects are determined through a node multilabel classification task, where drug nodes are classified over the set of side-effects they are associated to. Drug features include chemical descriptors and molecular fingerprints (vectors describing the functional groups that appear in each drug). Gene features include chromosome and strand information and the molecular function ontology. Transductive learning experiments were carried out: in this framework, side-effect supervisions were exploited as transductive features, in order to better train the network for the task it has to solve (finding side-effects of new drugs, given side-effects of drugs which were observed in the past). 
 
+In the output folder of the dataset, you can find some example files. They are named Soglia_X and correspond to outputs obtained on different versions of the dataset. Each of this versions is obtained with a different threshold on the minimum frequency of side-effects. A file named Soglia_X is always obtained by considering only the side effects which are associated to at least X drugs in SIDER. For instance, Soglia_50 is obtained by considering only side-effects that are associated to at least 50 drugs in SIDER.
+
 # Dependencies
 
 * Graph Neural Networks are implemented with the GNN software described here: 
-https://github.com/NickDrake117/GNN_tf_2.x
+https://github.com/NickDrake117/GNNkeras
 
 Niccolò Pancino et al. Graph Neural Networks for the Prediction of Protein-Protein Interfaces, 28th European Symposium on Artificial Neural Networks, Computational Intelligence and Machine Learning.
 
 * Composite Graph Neural Networks are implemented with this repository:
-https://github.com/NickDrake117/CompositeGNN
+https://github.com/PietroMSB/CompositeGNN_OGB_Experimentation
 
 Work in progress
 
